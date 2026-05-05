@@ -7,6 +7,7 @@ spring:
         name: opsvision
         version: 0.1.0
         type: SYNC
+        protocol: STREAMABLE
         instructions: >
           Read-only investigation tools for the SCPS warehouse picking flow (Marunda).
           Tools return structured evidence packs (state, rule inputs, related rows) — not verdicts.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke test the MCP server: open SSE, run initialize + tools/list + a battery of tools/call.
+"""Smoke test the MCP server: streamable HTTP transport with MCP protocol 2025-11-25.
 
 Usage:
   python3 mcp_smoke.py                     # full battery against the 4 fixtures
@@ -9,96 +9,86 @@ Examples:
   python3 mcp_smoke.py call getPickPackage '{"idOrCode":"PK/MAR-01/V-2026/223799"}'
   python3 mcp_smoke.py call getPickList '{"pickListId":106641}'
   python3 mcp_smoke.py call evaluatePickListReadiness '{"idOrCode":"PK/MAR-01/V-2026/223799"}'
+
+Transport note: the server speaks Streamable HTTP at /mcp (not SSE at /sse). Each
+JSON-RPC call is a POST whose response body is an SSE-encoded single event
+("event:message" + "data:<jsonrpc-payload>"). The session id from the initialize
+response must be threaded into every subsequent request via Mcp-Session-Id.
 """
 import json
 import sys
-import threading
-import time
 import urllib.request
-from queue import Queue, Empty
 
-BASE = "http://localhost:8081"
+ENDPOINT = "http://localhost:8081/mcp"
+PROTOCOL_VERSION = "2025-11-25"
 
-# Battery — fixtures confirmed to exist on the QA2 stockholm_marunda_restore snapshot.
 BATTERY = [
     ("getPickList",                   {"pickListId": 106641}),
     ("getPickPackage",                {"idOrCode": "PK/MAR-01/V-2026/223799"}),
-    ("evaluatePickListReadiness",     {"idOrCode": "PK/MAR-01/V-2026/223799"}),    # storage_stock_reserved → rule 5 fails
-    ("evaluatePickListReadiness",     {"idOrCode": "PK/MAR-01/V-2026/224143"}),    # priority_cal_done → rule 7 fails (HOLD request)
-    ("evaluatePickListReadiness",     {"idOrCode": "PK/MAR-01/V-2026/223506"}),    # partial_package
+    ("evaluatePickListReadiness",     {"idOrCode": "PK/MAR-01/V-2026/223799"}),    # all 13 pass → "candidate truly stuck"
+    ("evaluatePickListReadiness",     {"idOrCode": "PK/MAR-01/V-2026/224143"}),    # PRIORITY_CAL_DONE; rule 7 fails (HOLD task request)
+    ("evaluatePickListReadiness",     {"idOrCode": "PK/MAR-01/V-2026/223506"}),    # PARTIAL_PACKAGE; rule 6 fails (active PLDs)
 ]
 
-sse_events: Queue = Queue()
 
-
-def sse_reader():
-    req = urllib.request.Request(f"{BASE}/sse", headers={"Accept": "text/event-stream"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        event_type = None
-        for raw in resp:
-            line = raw.decode().rstrip("\n")
-            if line.startswith("event:"):
-                event_type = line[6:].strip()
-            elif line.startswith("data:"):
-                payload = line[5:].strip()
-                sse_events.put((event_type, payload))
-                event_type = None
-
-
-def post(message_url: str, body: dict, timeout: float = 8.0):
-    data = json.dumps(body).encode()
+def post(body: dict, session_id: str | None = None, timeout: float = 10.0):
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
     req = urllib.request.Request(
-        message_url, data=data, method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        ENDPOINT, data=json.dumps(body).encode(), method="POST", headers=headers
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.status
+        raw = resp.read().decode()
+        sid = resp.headers.get("Mcp-Session-Id")
+        return raw, sid
 
 
-def wait_event(predicate, timeout: float = 15.0):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            evt = sse_events.get(timeout=max(0.05, deadline - time.time()))
-        except Empty:
-            return None
-        if predicate(evt):
-            return evt
+def parse_sse_payload(raw: str) -> dict | None:
+    """Streamable HTTP wraps the JSON-RPC payload in an SSE event."""
+    if not raw.strip():
+        return None
+    for line in raw.splitlines():
+        if line.startswith("data:"):
+            return json.loads(line[5:].strip())
+    if raw.strip().startswith("{"):
+        return json.loads(raw)
     return None
 
 
-def open_session():
-    threading.Thread(target=sse_reader, daemon=True).start()
-    endpoint_evt = wait_event(lambda e: e[0] == "endpoint")
-    if not endpoint_evt:
-        sys.exit("FAIL: no SSE endpoint event")
-    message_url = BASE + endpoint_evt[1]
-
-    post(message_url, {
+def open_session() -> str:
+    init_resp_raw, sid = post({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {"name": "smoke-test", "version": "0.1"},
         },
     })
-    init_resp = wait_event(lambda e: '"id":1' in e[1])
-    si = json.loads(init_resp[1]).get("result", {}).get("serverInfo") if init_resp else None
-    print(f"connected to {si}")
-    post(message_url, {"jsonrpc": "2.0", "method": "notifications/initialized"})
-    return message_url
+    init_resp = parse_sse_payload(init_resp_raw)
+    if init_resp is None or "result" not in init_resp:
+        sys.exit(f"FAIL: initialize: {init_resp_raw[:300]}")
+    if not sid:
+        sys.exit("FAIL: server did not return Mcp-Session-Id")
+    si = init_resp["result"].get("serverInfo")
+    pv = init_resp["result"].get("protocolVersion")
+    print(f"connected to {si} via protocol {pv}")
+    post({"jsonrpc": "2.0", "method": "notifications/initialized"}, session_id=sid)
+    return sid
 
 
-def call_tool(message_url: str, request_id: int, name: str, args: dict, summarize: bool = True):
-    post(message_url, {
+def call_tool(sid: str, request_id: int, name: str, args: dict, summarize: bool = True):
+    raw, _ = post({
         "jsonrpc": "2.0", "id": request_id, "method": "tools/call",
         "params": {"name": name, "arguments": args},
-    })
-    evt = wait_event(lambda e: f'"id":{request_id}' in e[1])
-    if not evt:
-        print(f"  FAIL: no response for {name}")
+    }, session_id=sid)
+    parsed = parse_sse_payload(raw)
+    if parsed is None:
+        print(f"  FAIL: empty response for {name}")
         return None
-    parsed = json.loads(evt[1])
     if "error" in parsed:
         print(f"  ERROR {name}: {parsed['error']}")
         return None
@@ -149,16 +139,16 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "call":
         name = sys.argv[2]
         args = json.loads(sys.argv[3])
-        msg_url = open_session()
-        result = call_tool(msg_url, 100, name, args)
+        sid = open_session()
+        result = call_tool(sid, 100, name, args)
         if result is not None and isinstance(result, dict):
             print("\nfull JSON:")
             print(json.dumps(result, indent=2)[:3000])
         return
 
-    msg_url = open_session()
+    sid = open_session()
     for i, (name, args) in enumerate(BATTERY, start=10):
-        call_tool(msg_url, i, name, args)
+        call_tool(sid, i, name, args)
 
 
 if __name__ == "__main__":

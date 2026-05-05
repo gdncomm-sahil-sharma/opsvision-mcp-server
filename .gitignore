@@ -40,3 +40,6 @@ application-local.properties
 # Local seed data dumps (keep schema.sql, ignore generated seed/*.sql)
 db/*/seed/*.sql
 !db/*/seed/.gitkeep
+
+# Per-developer Claude Code local settings (not shared)
+.claude/settings.local.json
