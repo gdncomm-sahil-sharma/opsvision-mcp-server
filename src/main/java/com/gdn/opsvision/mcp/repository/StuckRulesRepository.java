@@ -192,53 +192,81 @@ public class StuckRulesRepository {
 
     // ─── rules 6, 7, 8, 12, 13 (own queries) ─────────────────────────────────
 
+    private record ActivePld(long pldId, Long pickListId, String status) {
+    }
+
     private RuleEvaluation noActivePlds(long ppId) {
-        Integer count = stockholm.sql("""
-                        SELECT count(*)::int
+        List<ActivePld> rows = stockholm.sql("""
+                        SELECT pld.id AS pld_id, pld.pick_list_id, pld.status
                         FROM pick_list_details pld
                         LEFT JOIN pick_list pl ON pl.id = pld.pick_list_id
                         WHERE pld.pick_package_id = :pp
                           AND ( pld.status = 'ADDED'
                              OR (pld.status = 'UPDATED' AND (pl.status IS NULL OR pl.status <> 'CLOSED')) )
+                        ORDER BY pld.id
                         """)
                 .param("pp", ppId)
-                .query(Integer.class)
-                .single();
+                .query(ActivePld.class)
+                .list();
+        List<Long> pickListIds = rows.stream()
+                .map(ActivePld::pickListId).filter(java.util.Objects::nonNull).distinct().toList();
         return new RuleEvaluation(
                 "no-active-plds",
                 "no pick_list_details with status=ADDED or status=UPDATED in a non-CLOSED pick_list",
-                STOCKHOLM, count == 0,
-                evidence("active_pld_count", count));
+                STOCKHOLM, rows.isEmpty(),
+                evidence(
+                        "active_pld_count", rows.size(),
+                        "pick_list_ids", pickListIds,
+                        "active_plds", rows));
+    }
+
+    private record OpenRow(long id, String status) {
     }
 
     private RuleEvaluation noOpenTaskRequests(long ppId) {
-        Integer count = movement.sql("""
-                        SELECT count(*)::int FROM picking_task_request
+        List<OpenRow> rows = movement.sql("""
+                        SELECT id, status FROM picking_task_request
                         WHERE reference_id = :pp AND status <> 'CLOSED'
+                        ORDER BY id
                         """)
                 .param("pp", ppId)
-                .query(Integer.class)
-                .single();
+                .query(OpenRow.class)
+                .list();
         return new RuleEvaluation(
                 "no-open-task-requests",
                 "no picking_task_request rows with status<>CLOSED for this pp",
-                MOVEMENT, count == 0,
-                evidence("non_closed_request_count", count));
+                MOVEMENT, rows.isEmpty(),
+                evidence(
+                        "non_closed_request_count", rows.size(),
+                        "by_status", countByStatus(rows),
+                        "open_requests", rows));
     }
 
     private RuleEvaluation noNonClosedTasks(long ppId) {
-        Integer count = movement.sql("""
-                        SELECT count(*)::int FROM picking_task
+        List<OpenRow> rows = movement.sql("""
+                        SELECT id, status FROM picking_task
                         WHERE pick_package_id = :pp AND status <> 'CLOSED'
+                        ORDER BY id
                         """)
                 .param("pp", ppId)
-                .query(Integer.class)
-                .single();
+                .query(OpenRow.class)
+                .list();
         return new RuleEvaluation(
                 "no-non-closed-tasks",
                 "no picking_task rows with status<>CLOSED for this pp",
-                MOVEMENT, count == 0,
-                evidence("non_closed_task_count", count));
+                MOVEMENT, rows.isEmpty(),
+                evidence(
+                        "non_closed_task_count", rows.size(),
+                        "by_status", countByStatus(rows),
+                        "open_tasks", rows));
+    }
+
+    private static Map<String, Long> countByStatus(List<OpenRow> rows) {
+        Map<String, Long> m = new LinkedHashMap<>();
+        for (OpenRow r : rows) {
+            m.merge(r.status(), 1L, Long::sum);
+        }
+        return m;
     }
 
     private RuleEvaluation notInProblemSolve(long ppId) {
