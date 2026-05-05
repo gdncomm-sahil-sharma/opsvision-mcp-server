@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.gdn.opsvision.mcp.tool.InventoryForItemTool;
+import com.gdn.opsvision.mcp.tool.MovementHistoryTool;
 import com.gdn.opsvision.mcp.tool.PickListReadinessTool;
 import com.gdn.opsvision.mcp.tool.PickListTool;
 import com.gdn.opsvision.mcp.tool.PickPackageTool;
@@ -26,10 +27,12 @@ public class McpToolsConfig {
             PickListReadinessTool pickListReadinessTool,
             InventoryForItemTool inventoryForItemTool,
             ReconciliationTool reconciliationTool,
-            StockTraceTool stockTraceTool) {
+            StockTraceTool stockTraceTool,
+            MovementHistoryTool movementHistoryTool) {
         return MethodToolCallbackProvider.builder()
                 .toolObjects(pickPackageTool, pickListTool, pickListReadinessTool,
-                        inventoryForItemTool, reconciliationTool, stockTraceTool)
+                        inventoryForItemTool, reconciliationTool, stockTraceTool,
+                        movementHistoryTool)
                 .build();
     }
 }
