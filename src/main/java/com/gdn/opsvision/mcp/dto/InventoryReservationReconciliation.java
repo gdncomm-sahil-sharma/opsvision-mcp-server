@@ -28,6 +28,7 @@ public record InventoryReservationReconciliation(
     public record StockholmDemand(
             List<Long> pickingItemIds,
             List<Long> salesOrderIds,
+            List<String> stockTraceIds,
             int requiredQty,
             int pickedQty,
             int remainingQty) {

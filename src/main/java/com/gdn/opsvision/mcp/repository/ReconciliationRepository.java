@@ -66,6 +66,7 @@ public class ReconciliationRepository {
         List<DemandRow> rows = stockholm.sql("""
                         SELECT pi.id AS picking_item_id,
                                pi.sales_order AS sales_order_id,
+                               pi.stock_trace_id,
                                pi.quantity AS required_qty,
                                COALESCE(pi.current_picked_quantity, 0) AS picked_qty,
                                i.code AS sku_code
@@ -93,6 +94,11 @@ public class ReconciliationRepository {
             List<Long> pickingItemIds = group.stream().map(DemandRow::pickingItemId).toList();
             List<Long> salesOrderIds = group.stream()
                     .map(DemandRow::salesOrderId).distinct().toList();
+            List<String> stockTraceIds = group.stream()
+                    .map(DemandRow::stockTraceId)
+                    .filter(s -> s != null && !s.isBlank())
+                    .distinct()
+                    .toList();
             int required = group.stream().mapToInt(DemandRow::requiredQty).sum();
             int picked = group.stream().mapToInt(DemandRow::pickedQty).sum();
             int remaining = required - picked;
@@ -126,7 +132,8 @@ public class ReconciliationRepository {
 
             out.add(new ItemReconciliation(
                     sku.isEmpty() ? null : sku,
-                    new StockholmDemand(pickingItemIds, salesOrderIds, required, picked, remaining),
+                    new StockholmDemand(pickingItemIds, salesOrderIds, stockTraceIds,
+                            required, picked, remaining),
                     inventory,
                     div));
         }
@@ -136,6 +143,7 @@ public class ReconciliationRepository {
     private record DemandRow(
             long pickingItemId,
             long salesOrderId,
+            String stockTraceId,
             int requiredQty,
             int pickedQty,
             String skuCode) {

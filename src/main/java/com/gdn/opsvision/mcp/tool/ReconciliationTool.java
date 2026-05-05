@@ -43,6 +43,12 @@ public class ReconciliationTool {
             via SKU code (item.code), not by id (item.id values differ between stockholm and \
             warehouse-inventory). siteCode is resolved from the PP's sales_order.warehouse.
 
+            Each StockholmDemand also carries `stockTraceIds` — the picking_item.stock_trace_id \
+            UUIDs for that SKU. Pass these to getStockTrace to walk the warehouse-inventory audit \
+            chain (PP creation reservation → bin reservation → PLD pick decrement → GIN). That's \
+            how you investigate aggregate-vs-bin drift or any unexpected divergence — the user \
+            won't know trace IDs exist; surface them yourself.
+
             Returns FACTS, not VERDICTS. A negative availableMinusRemaining does NOT mean a bug — \
             the divergence may be in-flight reservation, expected partial fulfilment, snapshot vs \
             live drift, or a real stock issue. The agent decides. If the PP doesn't exist, returns \
