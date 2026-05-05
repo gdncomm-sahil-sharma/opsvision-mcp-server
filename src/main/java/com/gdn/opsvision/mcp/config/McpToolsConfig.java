@@ -10,6 +10,7 @@ import com.gdn.opsvision.mcp.tool.PickListReadinessTool;
 import com.gdn.opsvision.mcp.tool.PickListTool;
 import com.gdn.opsvision.mcp.tool.PickPackageTool;
 import com.gdn.opsvision.mcp.tool.ReconciliationTool;
+import com.gdn.opsvision.mcp.tool.StockTraceTool;
 
 /**
  * Registers @Tool-annotated methods as MCP tool callbacks. Add new tool services here as
@@ -24,10 +25,11 @@ public class McpToolsConfig {
             PickListTool pickListTool,
             PickListReadinessTool pickListReadinessTool,
             InventoryForItemTool inventoryForItemTool,
-            ReconciliationTool reconciliationTool) {
+            ReconciliationTool reconciliationTool,
+            StockTraceTool stockTraceTool) {
         return MethodToolCallbackProvider.builder()
                 .toolObjects(pickPackageTool, pickListTool, pickListReadinessTool,
-                        inventoryForItemTool, reconciliationTool)
+                        inventoryForItemTool, reconciliationTool, stockTraceTool)
                 .build();
     }
 }
