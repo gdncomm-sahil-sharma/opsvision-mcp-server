@@ -1,0 +1,30 @@
+# OPTIONAL — most devs don't need this file. Env vars are the recommended path:
+#
+#   export STOCKHOLM_DB_PASSWORD=...
+#   export INVENTORY_DB_USER=...
+#   export INVENTORY_DB_PASSWORD=...
+#   export MOVEMENT_DB_USER=...
+#   export MOVEMENT_DB_PASSWORD=...
+#   mvn spring-boot:run
+#
+# Use this file ONLY if you'd rather keep creds on disk (gitignored) than retype env
+# vars per shell session:
+#
+#   1. cp application-local.yml.example application-local.yml
+#   2. Fill in the REPLACE_ME values (decrypt the SOPS data.json from each service's
+#      nonprod-deployment-* repo: `sops -d secrets/qa2/data.json | jq`).
+#   3. Run with the local profile:
+#        mvn spring-boot:run -Dspring-boot.run.profiles=local
+#
+# `application-local.yml` is gitignored. NEVER paste real creds into application.yml.
+
+opsvision:
+  datasource:
+    stockholm:
+      password: REPLACE_ME
+    inventory:
+      username: REPLACE_ME
+      password: REPLACE_ME
+    movement:
+      username: REPLACE_ME
+      password: REPLACE_ME

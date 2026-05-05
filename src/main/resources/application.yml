@@ -1,0 +1,89 @@
+spring:
+  application:
+    name: opsvision-mcp-server
+  ai:
+    mcp:
+      server:
+        name: opsvision
+        version: 0.1.0
+        type: SYNC
+        instructions: >
+          Read-only investigation tools for the SCPS warehouse picking flow (Marunda).
+          Tools return structured evidence packs (state, rule inputs, related rows) — not verdicts.
+          The caller is expected to draw conclusions from the evidence.
+
+server:
+  port: ${OPSVISION_PORT:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    org.springframework.ai.mcp: INFO
+    com.gdn.opsvision: DEBUG
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DataSources — three independent read-only Postgres pools.
+#
+# CREDENTIALS: read from env vars only. NEVER put real passwords in this file.
+#   STOCKHOLM_DB_PASSWORD       (user is fixed: inventory)
+#   INVENTORY_DB_USER  + INVENTORY_DB_PASSWORD
+#   MOVEMENT_DB_USER   + MOVEMENT_DB_PASSWORD
+#
+# Read-only is enforced THREE ways:
+#   1. Hikari read-only: true        → JDBC Connection.setReadOnly(true)
+#   2. connection-init-sql           → SET default_transaction_read_only = on
+#   3. @Transactional(readOnly=true) → Spring tx
+# DO NOT add `options=-c default_transaction_read_only=on` to the JDBC URL — it
+# makes pgjdbc misclassify both hosts as secondaries and the targetServerType=master
+# check then fails.
+# ─────────────────────────────────────────────────────────────────────────────
+opsvision:
+  datasource:
+
+    stockholm:
+      url: jdbc:postgresql://central-postgres13-01.qa2-sg.cld:5432,central-postgres13-02.qa2-sg.cld:5432/stockholm_marunda_restore?targetServerType=master&ApplicationName=opsvision-mcp
+      username: inventory
+      password: ${STOCKHOLM_DB_PASSWORD:}
+      driver-class-name: org.postgresql.Driver
+      hikari:
+        read-only: true
+        maximum-pool-size: 5
+        minimum-idle: 1
+        connection-timeout: 10000
+        connection-init-sql: "SET default_transaction_read_only = on"
+        pool-name: opsvision-stockholm
+
+    inventory:
+      url: jdbc:postgresql://central-postgres13-01.qa2-sg.cld:5432,central-postgres13-02.qa2-sg.cld:5432/warehouse_inventory_marunda?targetServerType=master&ApplicationName=opsvision-mcp
+      username: ${INVENTORY_DB_USER:}
+      password: ${INVENTORY_DB_PASSWORD:}
+      driver-class-name: org.postgresql.Driver
+      hikari:
+        read-only: true
+        maximum-pool-size: 5
+        minimum-idle: 1
+        connection-timeout: 10000
+        connection-init-sql: "SET default_transaction_read_only = on"
+        pool-name: opsvision-inventory
+
+    movement:
+      url: jdbc:postgresql://central-postgres13-01.qa2-sg.cld:5432,central-postgres13-02.qa2-sg.cld:5432/warehouse_stock_movement_marunda?targetServerType=master&ApplicationName=opsvision-mcp
+      username: ${MOVEMENT_DB_USER:}
+      password: ${MOVEMENT_DB_PASSWORD:}
+      driver-class-name: org.postgresql.Driver
+      hikari:
+        read-only: true
+        maximum-pool-size: 5
+        minimum-idle: 1
+        connection-timeout: 10000
+        connection-init-sql: "SET default_transaction_read_only = on"
+        pool-name: opsvision-movement

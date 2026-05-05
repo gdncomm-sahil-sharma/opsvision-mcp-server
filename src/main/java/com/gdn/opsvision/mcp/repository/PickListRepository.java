@@ -1,0 +1,51 @@
+package com.gdn.opsvision.mcp.repository;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.gdn.opsvision.mcp.dto.PickListEvidence;
+
+@Repository
+@Transactional(readOnly = true)
+public class PickListRepository {
+
+    private final JdbcClient stockholm;
+
+    public PickListRepository(@Qualifier("stockholmJdbcClient") JdbcClient stockholm) {
+        this.stockholm = stockholm;
+    }
+
+    public Optional<PickListEvidence.Header> findHeader(long pickListId) {
+        return stockholm.sql("""
+                        SELECT id, name, warehouse_id, picker_id, status, allotted_zone,
+                               priority, picking_priority_level, sub_level_priority,
+                               picking_task_list_id, created_date, updated_date
+                        FROM pick_list
+                        WHERE id = :id
+                        """)
+                .param("id", pickListId)
+                .query(PickListEvidence.Header.class)
+                .optional();
+    }
+
+    public List<PickListEvidence.LineItem> findLineItems(long pickListId) {
+        return stockholm.sql("""
+                        SELECT id, pick_list_id, pick_package_id, sales_order_id,
+                               warehouse_item_id, quantity, quantity_picked, problem_quantity,
+                               status, handling_unit_code, pick_package_handling_unit,
+                               picking_task_id, source_area_code, stock_trace_id,
+                               batch_id, wave_number, created_date
+                        FROM pick_list_details
+                        WHERE pick_list_id = :id
+                        ORDER BY id
+                        """)
+                .param("id", pickListId)
+                .query(PickListEvidence.LineItem.class)
+                .list();
+    }
+}
