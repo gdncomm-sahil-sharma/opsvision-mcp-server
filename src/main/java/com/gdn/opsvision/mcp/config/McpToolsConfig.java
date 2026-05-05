@@ -5,6 +5,8 @@ import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.gdn.opsvision.mcp.tool.FindPickingTaskRequestsTool;
+import com.gdn.opsvision.mcp.tool.FindPickingTasksTool;
 import com.gdn.opsvision.mcp.tool.InventoryForItemTool;
 import com.gdn.opsvision.mcp.tool.MovementHistoryTool;
 import com.gdn.opsvision.mcp.tool.PickListReadinessTool;
@@ -28,11 +30,14 @@ public class McpToolsConfig {
             InventoryForItemTool inventoryForItemTool,
             ReconciliationTool reconciliationTool,
             StockTraceTool stockTraceTool,
-            MovementHistoryTool movementHistoryTool) {
+            MovementHistoryTool movementHistoryTool,
+            FindPickingTasksTool findPickingTasksTool,
+            FindPickingTaskRequestsTool findPickingTaskRequestsTool) {
         return MethodToolCallbackProvider.builder()
                 .toolObjects(pickPackageTool, pickListTool, pickListReadinessTool,
                         inventoryForItemTool, reconciliationTool, stockTraceTool,
-                        movementHistoryTool)
+                        movementHistoryTool, findPickingTasksTool,
+                        findPickingTaskRequestsTool)
                 .build();
     }
 }

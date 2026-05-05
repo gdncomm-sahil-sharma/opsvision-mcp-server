@@ -1,6 +1,9 @@
 package com.gdn.opsvision.mcp.repository;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -59,6 +62,32 @@ public class PickPackageRepository {
                 .param("pp", pickPackageId)
                 .query(PickPackageEvidence.HandlingUnit.class)
                 .list();
+    }
+
+    /**
+     * Batch lookup of {@code pick_package.code} for a set of ids — used by find-tools to
+     * resolve PP codes for movement-DB search results without fanning out N+1 queries.
+     * Returns an empty map for an empty input. Order is insertion order of the input ids
+     * for ids that exist; missing ids are simply absent from the map.
+     */
+    public Map<Long, String> findCodesByIds(Collection<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        List<IdCode> rows = stockholm.sql("""
+                        SELECT id, code FROM pick_package WHERE id IN (:ids)
+                        """)
+                .param("ids", ids)
+                .query(IdCode.class)
+                .list();
+        Map<Long, String> out = new LinkedHashMap<>(rows.size());
+        for (IdCode r : rows) {
+            out.put(r.id(), r.code());
+        }
+        return out;
+    }
+
+    private record IdCode(long id, String code) {
     }
 
     public List<PickPackageEvidence.SalesOrder> findSalesOrders(long pickPackageId) {
