@@ -50,10 +50,15 @@ public class FindPickingTaskRequestsTool {
                 signal is preserved even on CLOSED requests).
               - referenceType='B2C_ONLINE' + status<>'CLOSED' → live B2C requests.
 
-            Date inputs are ISO date strings ('2026-05-04'). sinceDate is inclusive (>= midnight). \
-            untilDate is interpreted as inclusive of the named day (matches rows with \
-            created_date < midnight of the next day) — pass the same date for sinceDate and \
-            untilDate to scope to a single calendar day.
+            Date / time inputs accept either an ISO date ('2026-05-04') or a full ISO datetime \
+            ('2026-05-04T03:00:00'). When a date-only string is passed, sinceDate is the start of \
+            that day (00:00) and untilDate is interpreted as inclusive of the named day (rows \
+            with created_date < midnight of the next day) — pass the same date for both to scope \
+            to a single calendar day. When a datetime is passed, the bound is exact: sinceDate \
+            is inclusive (>=) and untilDate is exclusive (<). The ISO 'Z' suffix is tolerated \
+            but timestamps are interpreted in the database's local zone, since picking_task_request.created_date \
+            is timestamp without time zone. To chunk a busy day, pass datetimes like \
+            '2026-05-04T00:00:00' to '2026-05-04T03:00:00'.
 
             Returns FACTS, not VERDICTS. A list of HOLD requests is a *candidate list* — the \
             agent still has to chain into getStockTrace per result to confirm the half-applied \
@@ -62,8 +67,8 @@ public class FindPickingTaskRequestsTool {
             """)
     public PickingTaskRequestSearchEvidence findPickingTaskRequests(
             @ToolParam(description = "Warehouse / site code, e.g. 'MAR-0000000001'", required = false) String siteCode,
-            @ToolParam(description = "ISO date 'YYYY-MM-DD'; created_date >= sinceDate-00:00", required = false) String sinceDate,
-            @ToolParam(description = "ISO date 'YYYY-MM-DD'; inclusive of named day", required = false) String untilDate,
+            @ToolParam(description = "Lower bound: ISO date 'YYYY-MM-DD' (inclusive day) or datetime 'YYYY-MM-DDTHH:MM:SS' (inclusive moment)", required = false) String sinceDate,
+            @ToolParam(description = "Upper bound: ISO date 'YYYY-MM-DD' (inclusive day) or datetime (exclusive moment)", required = false) String untilDate,
             @ToolParam(description = "picking_task_request.status, e.g. 'HOLD' or 'CLOSED'", required = false) String status,
             @ToolParam(description = "picking_task_request.previous_status", required = false) String previousStatus,
             @ToolParam(description = "Order channel: B2C_ONLINE / B2B_ORDER / STANDARD / TRANSFER_WAREHOUSE / CONVERT_SKU_ASSEMBLY", required = false) String referenceType,
@@ -76,8 +81,8 @@ public class FindPickingTaskRequestsTool {
 
         List<RequestRow> rows = movementSearch.searchRequests(
                 siteCode,
-                parseStartOfDay(sinceDate),
-                parseExclusiveEndOfDay(untilDate),
+                parseSinceBound(sinceDate),
+                parseUntilBound(untilDate),
                 status,
                 previousStatus,
                 referenceType,
@@ -127,17 +132,26 @@ public class FindPickingTaskRequestsTool {
         return Math.min(limit, MAX_LIMIT);
     }
 
-    private static LocalDateTime parseStartOfDay(String iso) {
-        if (iso == null || iso.isBlank()) {
-            return null;
-        }
-        return LocalDate.parse(iso.trim()).atStartOfDay();
+    private static LocalDateTime parseSinceBound(String iso) {
+        return parseBound(iso, /*untilSemantics=*/false);
     }
 
-    private static LocalDateTime parseExclusiveEndOfDay(String iso) {
+    private static LocalDateTime parseUntilBound(String iso) {
+        return parseBound(iso, /*untilSemantics=*/true);
+    }
+
+    private static LocalDateTime parseBound(String iso, boolean untilSemantics) {
         if (iso == null || iso.isBlank()) {
             return null;
         }
-        return LocalDate.parse(iso.trim()).plusDays(1).atStartOfDay();
+        String s = iso.trim();
+        if (s.endsWith("Z")) {
+            s = s.substring(0, s.length() - 1);
+        }
+        if (s.contains("T")) {
+            return LocalDateTime.parse(s);
+        }
+        LocalDate d = LocalDate.parse(s);
+        return untilSemantics ? d.plusDays(1).atStartOfDay() : d.atStartOfDay();
     }
 }

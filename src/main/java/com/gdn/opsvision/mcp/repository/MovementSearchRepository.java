@@ -40,6 +40,8 @@ public class MovementSearchRepository {
             String automation,
             String lastModifiedBy,
             String type,
+            String skuCode,
+            String sourceAreaCode,
             int limit) {
         return movement.sql("""
                         SELECT id,
@@ -68,6 +70,8 @@ public class MovementSearchRepository {
                           AND (CAST(:automation AS text) IS NULL OR LOWER(automation) = LOWER(:automation))
                           AND (CAST(:lastModifiedBy AS text) IS NULL OR last_modified_by = :lastModifiedBy)
                           AND (CAST(:type AS text) IS NULL OR type = :type)
+                          AND (CAST(:skuCode AS text) IS NULL OR sku_code = :skuCode)
+                          AND (CAST(:sourceAreaCode AS text) IS NULL OR source_area_code = :sourceAreaCode)
                         ORDER BY created_date DESC, id DESC
                         LIMIT :lim
                         """)
@@ -79,6 +83,8 @@ public class MovementSearchRepository {
                 .param("automation", blankToNull(automation))
                 .param("lastModifiedBy", blankToNull(lastModifiedBy))
                 .param("type", blankToNull(type))
+                .param("skuCode", blankToNull(skuCode))
+                .param("sourceAreaCode", blankToNull(sourceAreaCode))
                 .param("lim", limit)
                 .query(TaskRow.class)
                 .list();

@@ -50,13 +50,18 @@ public class FindPickingTasksTool {
                 → candidate WCS phantom-close population.
               - status='CLOSED' + lastModifiedBy='SYSTEM' + previousStatus='PENDING_CLOSED' \
                 → SYSTEM-shortened closures regardless of automation.
-              - sourceArea filtering isn't supported here; use 'siteCode' (warehouse code, e.g. \
-                'MAR-0000000001') for the warehouse-level scope.
+              - skuCode='MTA-50783154-00001' → narrow population to a single SKU.
+              - sourceAreaCode='M4-STOR' → narrow population to a single source aisle.
 
-            Date inputs are ISO date strings ('2026-05-04'). sinceDate is inclusive (>= midnight). \
-            untilDate is interpreted as inclusive of the named day (matches rows with \
-            created_date < midnight of the next day) — pass the same date for sinceDate and \
-            untilDate to scope to a single calendar day.
+            Date / time inputs accept either an ISO date ('2026-05-04') or a full ISO datetime \
+            ('2026-05-04T03:00:00'). When a date-only string is passed, sinceDate is the start of \
+            that day (00:00) and untilDate is interpreted as inclusive of the named day (rows \
+            with created_date < midnight of the next day) — pass the same date for both to scope \
+            to a single calendar day. When a datetime is passed, the bound is exact: sinceDate \
+            is inclusive (>=) and untilDate is exclusive (<). The ISO 'Z' suffix is tolerated \
+            but timestamps are interpreted in the database's local zone, since picking_task.created_date \
+            is timestamp without time zone. To chunk a busy day, pass datetimes like \
+            '2026-05-04T00:00:00' to '2026-05-04T03:00:00'.
 
             phantomClose=true adds a cross-DB post-filter: only keeps tasks whose stock_trace_id \
             has zero DECREASE_* events in stock_history. That's the canonical "WCS phantom-close" \
@@ -70,13 +75,15 @@ public class FindPickingTasksTool {
             """)
     public PickingTaskSearchEvidence findPickingTasks(
             @ToolParam(description = "Warehouse / site code (warehouse.code), e.g. 'MAR-0000000001'", required = false) String siteCode,
-            @ToolParam(description = "ISO date 'YYYY-MM-DD'; created_date >= sinceDate-00:00", required = false) String sinceDate,
-            @ToolParam(description = "ISO date 'YYYY-MM-DD'; inclusive of named day (created_date < day after)", required = false) String untilDate,
+            @ToolParam(description = "Lower bound: ISO date 'YYYY-MM-DD' (inclusive day) or datetime 'YYYY-MM-DDTHH:MM:SS' (inclusive moment)", required = false) String sinceDate,
+            @ToolParam(description = "Upper bound: ISO date 'YYYY-MM-DD' (inclusive day) or datetime (exclusive moment)", required = false) String untilDate,
             @ToolParam(description = "picking_task.status, e.g. 'CLOSED'", required = false) String status,
             @ToolParam(description = "picking_task.previous_status, e.g. 'PENDING_CLOSED'", required = false) String previousStatus,
             @ToolParam(description = "picking_task.automation; case-insensitive (e.g. 'WCS')", required = false) String automation,
             @ToolParam(description = "picking_task.last_modified_by, e.g. 'SYSTEM'", required = false) String lastModifiedBy,
             @ToolParam(description = "picking_task.type", required = false) String type,
+            @ToolParam(description = "picking_task.sku_code (item.code), e.g. 'MTA-50783154-00001'", required = false) String skuCode,
+            @ToolParam(description = "picking_task.source_area_code, e.g. 'M4-STOR' or 'M2-STOR'", required = false) String sourceAreaCode,
             @ToolParam(description = "Max rows (default 50, capped at 200)", required = false) Integer limit,
             @ToolParam(description = "Cross-DB filter: only keep tasks whose stock_trace_id has zero DECREASE_* events in stock_history", required = false) Boolean phantomClose) {
 
@@ -85,13 +92,15 @@ public class FindPickingTasksTool {
 
         List<TaskRow> rows = movementSearch.searchTasks(
                 siteCode,
-                parseStartOfDay(sinceDate),
-                parseExclusiveEndOfDay(untilDate),
+                parseSinceBound(sinceDate),
+                parseUntilBound(untilDate),
                 status,
                 previousStatus,
                 automation,
                 lastModifiedBy,
                 type,
+                skuCode,
+                sourceAreaCode,
                 effectiveLimit + 1);
 
         boolean truncated = rows.size() > effectiveLimit;
@@ -163,17 +172,34 @@ public class FindPickingTasksTool {
         return Math.min(limit, MAX_LIMIT);
     }
 
-    private static LocalDateTime parseStartOfDay(String iso) {
-        if (iso == null || iso.isBlank()) {
-            return null;
-        }
-        return LocalDate.parse(iso.trim()).atStartOfDay();
+    /**
+     * Parse the lower bound. Date-only ('2026-05-04') becomes 00:00 of that day.
+     * A full datetime ('2026-05-04T03:15:00') is used as-is. Trailing 'Z' is tolerated.
+     */
+    private static LocalDateTime parseSinceBound(String iso) {
+        return parseBound(iso, /*untilSemantics=*/false);
     }
 
-    private static LocalDateTime parseExclusiveEndOfDay(String iso) {
+    /**
+     * Parse the upper bound. Date-only becomes start of next day (inclusive day semantics).
+     * A full datetime is used as-is (exclusive moment).
+     */
+    private static LocalDateTime parseUntilBound(String iso) {
+        return parseBound(iso, /*untilSemantics=*/true);
+    }
+
+    private static LocalDateTime parseBound(String iso, boolean untilSemantics) {
         if (iso == null || iso.isBlank()) {
             return null;
         }
-        return LocalDate.parse(iso.trim()).plusDays(1).atStartOfDay();
+        String s = iso.trim();
+        if (s.endsWith("Z")) {
+            s = s.substring(0, s.length() - 1);
+        }
+        if (s.contains("T")) {
+            return LocalDateTime.parse(s);
+        }
+        LocalDate d = LocalDate.parse(s);
+        return untilSemantics ? d.plusDays(1).atStartOfDay() : d.atStartOfDay();
     }
 }
