@@ -5,9 +5,11 @@ import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.gdn.opsvision.mcp.tool.InventoryForItemTool;
 import com.gdn.opsvision.mcp.tool.PickListReadinessTool;
 import com.gdn.opsvision.mcp.tool.PickListTool;
 import com.gdn.opsvision.mcp.tool.PickPackageTool;
+import com.gdn.opsvision.mcp.tool.ReconciliationTool;
 
 /**
  * Registers @Tool-annotated methods as MCP tool callbacks. Add new tool services here as
@@ -20,9 +22,12 @@ public class McpToolsConfig {
     ToolCallbackProvider opsvisionTools(
             PickPackageTool pickPackageTool,
             PickListTool pickListTool,
-            PickListReadinessTool pickListReadinessTool) {
+            PickListReadinessTool pickListReadinessTool,
+            InventoryForItemTool inventoryForItemTool,
+            ReconciliationTool reconciliationTool) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(pickPackageTool, pickListTool, pickListReadinessTool)
+                .toolObjects(pickPackageTool, pickListTool, pickListReadinessTool,
+                        inventoryForItemTool, reconciliationTool)
                 .build();
     }
 }
