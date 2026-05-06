@@ -12,6 +12,7 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
 
+import com.gdn.opsvision.mcp.dto.PickingTaskLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickingTaskSearchEvidence;
 import com.gdn.opsvision.mcp.dto.PickingTaskSearchEvidence.TaskMatch;
 import com.gdn.opsvision.mcp.repository.MovementSearchRepository;
@@ -145,7 +146,9 @@ public class FindPickingTasksTool {
                     r.pickPackageId(),
                     r.pickPackageId() == null ? null : ppCodes.get(r.pickPackageId()),
                     r.status(),
+                    PickingTaskLifecycleStage.forStatus(r.status()),
                     r.previousStatus(),
+                    PickingTaskLifecycleStage.forStatus(r.previousStatus()),
                     r.createdDate(),
                     r.lastModifiedDate(),
                     r.lastModifiedBy(),

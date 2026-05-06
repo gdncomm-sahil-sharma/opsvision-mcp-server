@@ -1,14 +1,12 @@
 package com.gdn.opsvision.mcp.repository;
 
+import java.time.Instant;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
-
-import com.gdn.opsvision.mcp.dto.MovementHistoryEvidence.Task;
-import com.gdn.opsvision.mcp.dto.MovementHistoryEvidence.TaskRequest;
 
 /**
  * Reads warehouse-movement state for a pick package. Both {@code picking_task} and
@@ -27,7 +25,7 @@ public class MovementRepository {
         this.movement = movement;
     }
 
-    public List<TaskRequest> findRequestsForPp(long ppId) {
+    public List<TaskRequestRow> findRequestsForPp(long ppId) {
         return movement.sql("""
                         SELECT id,
                                status,
@@ -45,11 +43,11 @@ public class MovementRepository {
                         ORDER BY created_date, id
                         """)
                 .param("pp", ppId)
-                .query(TaskRequest.class)
+                .query(TaskRequestRow.class)
                 .list();
     }
 
-    public List<Task> findTasksForPp(long ppId) {
+    public List<TaskRow> findTasksForPp(long ppId) {
         return movement.sql("""
                         SELECT id,
                                status,
@@ -73,7 +71,43 @@ public class MovementRepository {
                         ORDER BY created_date, id
                         """)
                 .param("pp", ppId)
-                .query(Task.class)
+                .query(TaskRow.class)
                 .list();
+    }
+
+    /** Raw row shape; tool layer attaches lifecycleStage + previousLifecycleStage. */
+    public record TaskRequestRow(
+            long id,
+            String status,
+            String previousStatus,
+            Instant createdDate,
+            Instant lastModifiedDate,
+            String lastModifiedBy,
+            String referenceType,
+            String targetAreaCode,
+            String pickingType,
+            String type,
+            String multiSkuBatchFailedReason) {
+    }
+
+    /** Raw row shape for picking_task. */
+    public record TaskRow(
+            long id,
+            String status,
+            String previousStatus,
+            Instant createdDate,
+            Instant lastModifiedDate,
+            String lastModifiedBy,
+            Long pickingTaskRequestDetail,
+            Long pickingTaskList,
+            String sourceAreaCode,
+            String skuCode,
+            Integer quantity,
+            String automation,
+            String stockTraceId,
+            String type,
+            Integer retryCount,
+            String failureReason,
+            String reason) {
     }
 }

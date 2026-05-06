@@ -32,7 +32,12 @@ public record SalesOrderEvidence(
         ParentPickPackage parentPickPackage,
         List<PickingItem> pickingItems) {
 
-    public record LastStatus(int code, String label) {
+    /**
+     * Sales-order status with both the raw integer code, the resolved enum label, and a
+     * coarse {@link SalesOrderLifecycleStage} for triage. Mapping table covers all 18
+     * documented {@code SOStatus} ordinals.
+     */
+    public record LastStatus(int code, String label, SalesOrderLifecycleStage lifecycleStage) {
     }
 
     public record ParentPickPackage(Long id, String code) {

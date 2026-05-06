@@ -30,7 +30,9 @@ public record MovementHistoryEvidence(
     public record TaskRequest(
             long id,
             String status,
+            PickingTaskRequestLifecycleStage lifecycleStage,
             String previousStatus,
+            PickingTaskRequestLifecycleStage previousLifecycleStage,
             Instant createdDate,
             Instant lastModifiedDate,
             String lastModifiedBy,
@@ -44,7 +46,9 @@ public record MovementHistoryEvidence(
     public record Task(
             long id,
             String status,
+            PickingTaskLifecycleStage lifecycleStage,
             String previousStatus,
+            PickingTaskLifecycleStage previousLifecycleStage,
             Instant createdDate,
             Instant lastModifiedDate,
             String lastModifiedBy,

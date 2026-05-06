@@ -12,6 +12,7 @@ import com.gdn.opsvision.mcp.dto.SalesOrderEvidence;
 import com.gdn.opsvision.mcp.dto.SalesOrderEvidence.LastStatus;
 import com.gdn.opsvision.mcp.dto.SalesOrderEvidence.ParentPickPackage;
 import com.gdn.opsvision.mcp.dto.SalesOrderEvidence.PickingItem;
+import com.gdn.opsvision.mcp.dto.SalesOrderLifecycleStage;
 import com.gdn.opsvision.mcp.repository.SalesOrderRepository;
 import com.gdn.opsvision.mcp.repository.SalesOrderRepository.PickingItemRow;
 import com.gdn.opsvision.mcp.repository.SalesOrderRepository.SalesOrderHeader;
@@ -107,11 +108,9 @@ public class GetSalesOrderTool {
     }
 
     private static LastStatus mapLastStatus(int code) {
-        String label = switch (code) {
-            case 5 -> "OUT_OF_STOCK";
-            case 17 -> "OUT_OF_STOCK_CANCEL";
-            default -> "STATUS_" + code;
-        };
-        return new LastStatus(code, label);
+        return new LastStatus(
+                code,
+                SalesOrderLifecycleStage.labelForOrdinal(code),
+                SalesOrderLifecycleStage.forOrdinal(code));
     }
 }

@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.tool;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -8,8 +9,14 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
 
 import com.gdn.opsvision.mcp.dto.MovementHistoryEvidence;
+import com.gdn.opsvision.mcp.dto.MovementHistoryEvidence.Task;
+import com.gdn.opsvision.mcp.dto.MovementHistoryEvidence.TaskRequest;
 import com.gdn.opsvision.mcp.dto.PickPackageEvidence;
+import com.gdn.opsvision.mcp.dto.PickingTaskLifecycleStage;
+import com.gdn.opsvision.mcp.dto.PickingTaskRequestLifecycleStage;
 import com.gdn.opsvision.mcp.repository.MovementRepository;
+import com.gdn.opsvision.mcp.repository.MovementRepository.TaskRequestRow;
+import com.gdn.opsvision.mcp.repository.MovementRepository.TaskRow;
 import com.gdn.opsvision.mcp.repository.PickPackageRepository;
 
 @Service
@@ -60,10 +67,49 @@ public class MovementHistoryTool {
             return new MovementHistoryEvidence(null, List.of(), List.of());
         }
         long ppId = header.get().id();
-        return new MovementHistoryEvidence(
-                header.get(),
-                movementRepo.findRequestsForPp(ppId),
-                movementRepo.findTasksForPp(ppId));
+        List<TaskRequestRow> reqRows = movementRepo.findRequestsForPp(ppId);
+        List<TaskRequest> requests = new ArrayList<>(reqRows.size());
+        for (TaskRequestRow r : reqRows) {
+            requests.add(new TaskRequest(
+                    r.id(),
+                    r.status(),
+                    PickingTaskRequestLifecycleStage.forStatus(r.status()),
+                    r.previousStatus(),
+                    PickingTaskRequestLifecycleStage.forStatus(r.previousStatus()),
+                    r.createdDate(),
+                    r.lastModifiedDate(),
+                    r.lastModifiedBy(),
+                    r.referenceType(),
+                    r.targetAreaCode(),
+                    r.pickingType(),
+                    r.type(),
+                    r.multiSkuBatchFailedReason()));
+        }
+        List<TaskRow> taskRows = movementRepo.findTasksForPp(ppId);
+        List<Task> tasks = new ArrayList<>(taskRows.size());
+        for (TaskRow t : taskRows) {
+            tasks.add(new Task(
+                    t.id(),
+                    t.status(),
+                    PickingTaskLifecycleStage.forStatus(t.status()),
+                    t.previousStatus(),
+                    PickingTaskLifecycleStage.forStatus(t.previousStatus()),
+                    t.createdDate(),
+                    t.lastModifiedDate(),
+                    t.lastModifiedBy(),
+                    t.pickingTaskRequestDetail(),
+                    t.pickingTaskList(),
+                    t.sourceAreaCode(),
+                    t.skuCode(),
+                    t.quantity(),
+                    t.automation(),
+                    t.stockTraceId(),
+                    t.type(),
+                    t.retryCount(),
+                    t.failureReason(),
+                    t.reason()));
+        }
+        return new MovementHistoryEvidence(header.get(), requests, tasks);
     }
 
     private Optional<PickPackageEvidence.Header> lookupHeader(String idOrCode) {
