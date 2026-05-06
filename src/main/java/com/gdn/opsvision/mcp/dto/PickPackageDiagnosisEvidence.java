@@ -39,6 +39,11 @@ public record PickPackageDiagnosisEvidence(
         ReplenishmentSignal replenishment,
         BatchConsolidation batchConsolidation,
         PackingOrderInfo packingOrder,
+        // Movement-DB state — non-CLOSED rows only, sorted most-recent first.
+        // Pattern A (request stuck in HOLD) and Pattern B precursors (PENDING_CLOSED tasks)
+        // are visible here directly without chaining to getMovementHistory.
+        List<MovementHistoryEvidence.TaskRequest> movementTaskRequests,
+        List<MovementHistoryEvidence.Task> movementTasks,
         WorkflowSignals signals,
         StatusInterpretation pickingStatusInterpretation,
         StatusInterpretation ppStatusInterpretation) {
@@ -206,6 +211,15 @@ public record PickPackageDiagnosisEvidence(
             // ever created (or it was hard-deleted). True iff picking_status is post-pick
             // (REACHED_TO_QC / PICKING_COMPLETE) AND packingOrder.present is false.
             boolean packingOrderMissing,
+            // Movement-DB existence checks. The agent reads movementTaskRequests /
+            // movementTasks lists for state-level detail (lifecycleStage); these signals
+            // are convenience flags so the agent can quickly tell whether the WCS layer
+            // has any open work for this PP at all. Pattern A is detectable via the
+            // combination of hasOpenTaskRequest=true AND hasOpenMovementTask=false (a
+            // request was created but never spawned children) — the agent composes that.
+            boolean hasOpenTaskRequest,
+            boolean hasOpenMovementTask,
+            boolean hasFailedMovementTask,
             // per-derived-signal one-liner: input fields considered + rule applied
             Map<String, String> derivationNotes,
             // Per-signal classification — only entries for signals that are TRUE in this

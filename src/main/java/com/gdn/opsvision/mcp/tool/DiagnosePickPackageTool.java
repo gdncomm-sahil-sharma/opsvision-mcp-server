@@ -12,8 +12,11 @@ import org.springframework.stereotype.Service;
 
 import com.gdn.opsvision.mcp.dto.InventoryForItemEvidence.WarehouseItemMaster;
 import com.gdn.opsvision.mcp.dto.LifecycleStage;
+import com.gdn.opsvision.mcp.dto.MovementHistoryEvidence;
 import com.gdn.opsvision.mcp.dto.PackingOrderLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickListLifecycleStage;
+import com.gdn.opsvision.mcp.dto.PickingTaskLifecycleStage;
+import com.gdn.opsvision.mcp.dto.PickingTaskRequestLifecycleStage;
 import com.gdn.opsvision.mcp.dto.SignalKind;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
@@ -28,6 +31,9 @@ import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.SourceAreaCoverage
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.StatusInterpretation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.WorkflowSignals;
 import com.gdn.opsvision.mcp.repository.InventoryRepository;
+import com.gdn.opsvision.mcp.repository.MovementRepository;
+import com.gdn.opsvision.mcp.repository.MovementRepository.TaskRequestRow;
+import com.gdn.opsvision.mcp.repository.MovementRepository.TaskRow;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.BatchSiblingRow;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.DemandRow;
@@ -102,6 +108,7 @@ public class DiagnosePickPackageTool {
             Map.entry("hasEligiblePickersButNoneAvailable",     SignalKind.BLOCKER_INTERNAL),
             Map.entry("hasReplenishmentDeficit",                SignalKind.BLOCKER_INTERNAL),
             Map.entry("packingOrderMissing",                    SignalKind.BLOCKER_INTERNAL),
+            Map.entry("hasFailedMovementTask",                  SignalKind.BLOCKER_INTERNAL),
             // Stage indicators — current lifecycle position.
             Map.entry("isPartialPackage",        SignalKind.STAGE),
             Map.entry("isReadyForManualPicking", SignalKind.STAGE),
@@ -116,7 +123,9 @@ public class DiagnosePickPackageTool {
             // Context — supplementary information about queue/batch shape.
             Map.entry("hasAnyOpenPickList",      SignalKind.CONTEXT),
             Map.entry("hasMultipleSourceAreas",  SignalKind.CONTEXT),
-            Map.entry("isInBatchOrWave",         SignalKind.CONTEXT));
+            Map.entry("isInBatchOrWave",         SignalKind.CONTEXT),
+            Map.entry("hasOpenTaskRequest",      SignalKind.CONTEXT),
+            Map.entry("hasOpenMovementTask",     SignalKind.CONTEXT));
 
     /** Internal: lifecycle stage + one-line meaning per status value. */
     private record StatusInfo(LifecycleStage stage, String meaning) {
@@ -179,14 +188,17 @@ public class DiagnosePickPackageTool {
     private final PickPackageDiagnosisRepository diagnosisRepo;
     private final PickerAccessRepository pickerAccessRepo;
     private final InventoryRepository inventoryRepo;
+    private final MovementRepository movementRepo;
 
     public DiagnosePickPackageTool(
             PickPackageDiagnosisRepository diagnosisRepo,
             PickerAccessRepository pickerAccessRepo,
-            InventoryRepository inventoryRepo) {
+            InventoryRepository inventoryRepo,
+            MovementRepository movementRepo) {
         this.diagnosisRepo = diagnosisRepo;
         this.pickerAccessRepo = pickerAccessRepo;
         this.inventoryRepo = inventoryRepo;
+        this.movementRepo = movementRepo;
     }
 
     @Tool(description = """
@@ -333,8 +345,17 @@ public class DiagnosePickPackageTool {
         // §5c packing_order presence + stage (Pattern C downstream confirmation)
         PackingOrderInfo packingOrder = computePackingOrder(ppId);
 
+        // §5d movement-DB state — non-CLOSED rows only, sorted most-recent first.
+        // Surfaces Pattern A (request stuck in HOLD) directly without chaining.
+        List<MovementHistoryEvidence.TaskRequest> movementTaskRequests =
+                fetchOpenMovementTaskRequests(ppId);
+        List<MovementHistoryEvidence.Task> movementTasks =
+                fetchOpenMovementTasks(ppId);
+
         // §6 derived booleans + per-derivation notes
-        WorkflowSignals signals = computeSignals(s, pickListAllocations, replenishment, distinctSourceAreas, batchConsolidation, packingOrder);
+        WorkflowSignals signals = computeSignals(s, pickListAllocations, replenishment,
+                distinctSourceAreas, batchConsolidation, packingOrder,
+                movementTaskRequests, movementTasks);
 
         // §7 structured status interpretations (replaces previous applicableHints prose)
         StatusInterpretation pickingInterp = buildPickingStatusInterpretation(s.pickingStatus());
@@ -350,9 +371,73 @@ public class DiagnosePickPackageTool {
                 replenishment,
                 batchConsolidation,
                 packingOrder,
+                movementTaskRequests,
+                movementTasks,
                 signals,
                 pickingInterp,
                 ppInterp);
+    }
+
+    // ─── movement-DB fetch + non-CLOSED filter ──────────────────────────────
+
+    private static final int MAX_MOVEMENT_ROWS = 20;
+
+    private List<MovementHistoryEvidence.TaskRequest> fetchOpenMovementTaskRequests(long ppId) {
+        return movementRepo.findRequestsForPp(ppId).stream()
+                .filter(r -> !"CLOSED".equalsIgnoreCase(r.status()))
+                .sorted((a, b) -> b.createdDate().compareTo(a.createdDate()))
+                .limit(MAX_MOVEMENT_ROWS)
+                .map(DiagnosePickPackageTool::mapTaskRequest)
+                .toList();
+    }
+
+    private List<MovementHistoryEvidence.Task> fetchOpenMovementTasks(long ppId) {
+        return movementRepo.findTasksForPp(ppId).stream()
+                .filter(t -> !"CLOSED".equalsIgnoreCase(t.status()))
+                .sorted((a, b) -> b.createdDate().compareTo(a.createdDate()))
+                .limit(MAX_MOVEMENT_ROWS)
+                .map(DiagnosePickPackageTool::mapTask)
+                .toList();
+    }
+
+    private static MovementHistoryEvidence.TaskRequest mapTaskRequest(TaskRequestRow r) {
+        return new MovementHistoryEvidence.TaskRequest(
+                r.id(),
+                r.status(),
+                PickingTaskRequestLifecycleStage.forStatus(r.status()),
+                r.previousStatus(),
+                PickingTaskRequestLifecycleStage.forStatus(r.previousStatus()),
+                r.createdDate(),
+                r.lastModifiedDate(),
+                r.lastModifiedBy(),
+                r.referenceType(),
+                r.targetAreaCode(),
+                r.pickingType(),
+                r.type(),
+                r.multiSkuBatchFailedReason());
+    }
+
+    private static MovementHistoryEvidence.Task mapTask(TaskRow t) {
+        return new MovementHistoryEvidence.Task(
+                t.id(),
+                t.status(),
+                PickingTaskLifecycleStage.forStatus(t.status()),
+                t.previousStatus(),
+                PickingTaskLifecycleStage.forStatus(t.previousStatus()),
+                t.createdDate(),
+                t.lastModifiedDate(),
+                t.lastModifiedBy(),
+                t.pickingTaskRequestDetail(),
+                t.pickingTaskList(),
+                t.sourceAreaCode(),
+                t.skuCode(),
+                t.quantity(),
+                t.automation(),
+                t.stockTraceId(),
+                t.type(),
+                t.retryCount(),
+                t.failureReason(),
+                t.reason());
     }
 
     // ─── lookup + mapping helpers ────────────────────────────────────────────
@@ -416,7 +501,8 @@ public class DiagnosePickPackageTool {
 
     private static PickPackageDiagnosisEvidence notFound(String code) {
         return new PickPackageDiagnosisEvidence(
-                code, /*found=*/false, null, null, List.of(), List.of(), null, null, null, null, null, null);
+                code, /*found=*/false, null, null, List.of(), List.of(), null, null, null,
+                List.of(), List.of(), null, null, null);
     }
 
     // ─── eligible-picker computation ────────────────────────────────────────
@@ -569,7 +655,9 @@ public class DiagnosePickPackageTool {
             ReplenishmentSignal replenishment,
             List<String> distinctSourceAreas,
             BatchConsolidation batchConsolidation,
-            PackingOrderInfo packingOrder) {
+            PackingOrderInfo packingOrder,
+            List<MovementHistoryEvidence.TaskRequest> movementTaskRequests,
+            List<MovementHistoryEvidence.Task> movementTasks) {
         String ps = s.pickingStatus() == null ? "" : s.pickingStatus();
         int statusInt = s.status();
         boolean isCanceled = s.canceled();
@@ -614,6 +702,18 @@ public class DiagnosePickPackageTool {
         boolean packingOrderPresent = packingOrder != null && packingOrder.present();
         boolean packingOrderMissing = isPostPick && !packingOrderPresent;
 
+        // Movement-DB existence + failure indicators. Lists carry the structural detail
+        // (lifecycleStage on each row); these flags are convenience for "did the WCS
+        // layer get involved at all" questions.
+        boolean hasOpenTaskRequest =
+                movementTaskRequests != null && !movementTaskRequests.isEmpty();
+        boolean hasOpenMovementTask =
+                movementTasks != null && !movementTasks.isEmpty();
+        boolean hasFailedMovementTask = movementTasks != null
+                && movementTasks.stream().anyMatch(t ->
+                        (t.retryCount() != null && t.retryCount() > 0)
+                                || (t.failureReason() != null && !t.failureReason().isBlank()));
+
         Map<String, String> notes = new LinkedHashMap<>();
         notes.put("hasAnyOpenPickList",
                 "TRUE iff any pickListAllocations row has status=OPEN AND pickerId=null. Considered "
@@ -641,6 +741,19 @@ public class DiagnosePickPackageTool {
                         + "AND no active packing_order row exists. picking_status=" + ps
                         + ", packingOrder.present=" + packingOrderPresent
                         + ". Pattern C downstream confirmation.");
+        notes.put("hasOpenTaskRequest",
+                "TRUE iff any non-CLOSED picking_task_request exists for this PP. Considered "
+                        + (movementTaskRequests == null ? 0 : movementTaskRequests.size())
+                        + " non-CLOSED request row(s).");
+        notes.put("hasOpenMovementTask",
+                "TRUE iff any non-CLOSED picking_task exists for this PP. Considered "
+                        + (movementTasks == null ? 0 : movementTasks.size())
+                        + " non-CLOSED task row(s). Pattern A signature when this is FALSE but "
+                        + "hasOpenTaskRequest is TRUE — request created but never spawned tasks.");
+        notes.put("hasFailedMovementTask",
+                "TRUE iff any picking_task has retryCount>0 OR failureReason populated. Considered "
+                        + (movementTasks == null ? 0 : movementTasks.size())
+                        + " non-CLOSED task row(s).");
 
         // Build active-only signalKinds: only signals that are TRUE get an entry.
         Map<String, SignalKind> kinds = new LinkedHashMap<>();
@@ -674,6 +787,9 @@ public class DiagnosePickPackageTool {
         addIfTrue(kinds, "hasMultipleSourceAreas", hasMultipleSourceAreas);
         addIfTrue(kinds, "isInBatchOrWave", inBatch);
         addIfTrue(kinds, "packingOrderMissing", packingOrderMissing);
+        addIfTrue(kinds, "hasOpenTaskRequest", hasOpenTaskRequest);
+        addIfTrue(kinds, "hasOpenMovementTask", hasOpenMovementTask);
+        addIfTrue(kinds, "hasFailedMovementTask", hasFailedMovementTask);
 
         return new WorkflowSignals(
                 // picking_status booleans
@@ -709,6 +825,9 @@ public class DiagnosePickPackageTool {
                 hasMultipleSourceAreas,
                 inBatch,
                 packingOrderMissing,
+                hasOpenTaskRequest,
+                hasOpenMovementTask,
+                hasFailedMovementTask,
                 notes,
                 kinds);
     }
