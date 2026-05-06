@@ -207,7 +207,12 @@ public record PickPackageDiagnosisEvidence(
             // (REACHED_TO_QC / PICKING_COMPLETE) AND packingOrder.present is false.
             boolean packingOrderMissing,
             // per-derived-signal one-liner: input fields considered + rule applied
-            Map<String, String> derivationNotes) {
+            Map<String, String> derivationNotes,
+            // Per-signal classification — only entries for signals that are TRUE in this
+            // response are emitted. Encodes the dominance hierarchy structurally so the
+            // agent can lead with OPERATOR_OVERRIDE before BLOCKER_* before STAGE before
+            // CONTEXT, instead of guessing from a flat boolean dict.
+            Map<String, SignalKind> signalKinds) {
     }
 
     /**

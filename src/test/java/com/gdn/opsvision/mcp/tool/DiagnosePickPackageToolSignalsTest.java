@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import com.gdn.opsvision.mcp.dto.PackingOrderLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickListLifecycleStage;
+import com.gdn.opsvision.mcp.dto.SignalKind;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.DemandShortage;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PackingOrderInfo;
@@ -187,6 +188,67 @@ class DiagnosePickPackageToolSignalsTest {
     }
 
     @Test
+    void q23_rejectedOperatorOverride_outranksPostPickStage() {
+        // Q23 from the validation set: PP rejected=true, pp.status=1 (WEIGHT_CAPTURE_PENDING),
+        // picking_status=REACHED_TO_QC. Three signals fire. The agent should lead with
+        // the operator override, not the post-pick stage. signalKinds proves the
+        // ordering is detectable structurally.
+        PpStateRow s = ppRejectedAtWeightCapture();
+
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), new ReplenishmentSignal(false, List.of()),
+                List.of(), batchAbsent(), packingOrderAbsent());
+
+        // Three booleans true:
+        assertThat(out.isRejected()).isTrue();
+        assertThat(out.isWeightCapturePending()).isTrue();
+        assertThat(out.isReachedToQc()).isTrue();
+
+        // signalKinds map carries the structural classification:
+        Map<String, SignalKind> kinds = out.signalKinds();
+        assertThat(kinds).containsEntry("isRejected", SignalKind.OPERATOR_OVERRIDE);
+        assertThat(kinds).containsEntry("isWeightCapturePending", SignalKind.STAGE);
+        assertThat(kinds).containsEntry("isReachedToQc", SignalKind.STAGE);
+
+        // Agent's heuristic: scan for OPERATOR_OVERRIDE first.
+        boolean hasOverride = kinds.entrySet().stream()
+                .anyMatch(e -> e.getValue() == SignalKind.OPERATOR_OVERRIDE);
+        assertThat(hasOverride).isTrue();
+    }
+
+    @Test
+    void signalKinds_onlyContainsTrueSignals() {
+        // Healthy READY_FOR_MANUAL_PICKING PP with no pick lists, no overrides:
+        // signalKinds should ONLY have entries for the true signals.
+        PpStateRow s = ppOpen("READY_FOR_MANUAL_PICKING");
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), new ReplenishmentSignal(false, List.of()),
+                List.of(), batchAbsent(), packingOrderAbsent());
+
+        // Only isReadyForManualPicking should be in kinds.
+        assertThat(out.signalKinds()).containsOnlyKeys("isReadyForManualPicking");
+        assertThat(out.signalKinds().get("isReadyForManualPicking")).isEqualTo(SignalKind.STAGE);
+    }
+
+    @Test
+    void allKnownSignalsClassified() {
+        // Every WorkflowSignals boolean field name must have an entry in
+        // DiagnosePickPackageTool.SIGNAL_KINDS. CI fails if a new signal field is
+        // added without classification.
+        java.util.Set<String> classifiedNames = DiagnosePickPackageTool.SIGNAL_KINDS.keySet();
+        java.util.List<String> declaredFields = java.util.Arrays.stream(
+                        WorkflowSignals.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName)
+                .filter(n -> !"derivationNotes".equals(n) && !"signalKinds".equals(n))
+                .toList();
+        for (String field : declaredFields) {
+            assertThat(classifiedNames)
+                    .as("WorkflowSignals field '%s' must have an entry in SIGNAL_KINDS", field)
+                    .contains(field);
+        }
+    }
+
+    @Test
     void inBatchTrueOnlyWhenBatchConsolidationFlagSet() {
         PpStateRow s = ppOpen("PARTIAL_PACKAGE");
         BatchConsolidation absent = batchAbsent();
@@ -213,6 +275,30 @@ class DiagnosePickPackageToolSignalsTest {
                 /*shortPick*/ Boolean.FALSE,
                 /*deprioritized*/ Boolean.FALSE,
                 /*rejected*/ Boolean.FALSE,
+                /*priorityBoosted*/ Boolean.FALSE,
+                /*assignedPickerId*/ null, /*assignedPickerCode*/ null,
+                /*assignedPickerDate*/ null,
+                /*distributionZoneCode*/ null,
+                /*batchId*/ null, /*batchType*/ null, /*waveNumber*/ null,
+                /*createdDate*/ Instant.now(),
+                /*updatedDate*/ Instant.now(),
+                /*autoCancelDate*/ null,
+                /*siteCode*/ "MAR-0000000001");
+    }
+
+    /**
+     * Fixture mirroring Q23: pp.status=1 (WEIGHT_CAPTURE_PENDING),
+     * picking_status=REACHED_TO_QC, rejected=true.
+     */
+    private static PpStateRow ppRejectedAtWeightCapture() {
+        return new PpStateRow(
+                /*ppId*/ 1L, /*ppCode*/ "PK/MAR-01/III-2025/32868", /*status*/ 1,
+                /*pickingStatus*/ "REACHED_TO_QC",
+                /*canceled*/ false,
+                /*inProgress*/ Boolean.TRUE,
+                /*shortPick*/ Boolean.FALSE,
+                /*deprioritized*/ Boolean.FALSE,
+                /*rejected*/ Boolean.TRUE,
                 /*priorityBoosted*/ Boolean.FALSE,
                 /*assignedPickerId*/ null, /*assignedPickerCode*/ null,
                 /*assignedPickerDate*/ null,

@@ -11,6 +11,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusBreakdown;
+import com.gdn.opsvision.mcp.dto.SignalKind;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.AvailableWork;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.PickerWorkflowSignals;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.SiblingPickerSummary;
@@ -125,6 +126,33 @@ class DiagnosePickerQueueToolSignalsTest {
         assertThat(out.isInactive()).isTrue();
         assertThat(out.isDeleted()).isTrue();
         assertThat(out.pickerStatusOffline()).isTrue();
+    }
+
+    @Test
+    void inactivePickerOverride_classifiedAsOperatorOverride() {
+        // active=false is an operator-set override on the picker — must dominate.
+        PickerStateRow p = picker("OFFLINE", false, false);
+        PickerWorkflowSignals out = DiagnosePickerQueueTool.computeSignals(
+                p, List.of(), Set.of(),
+                new AvailableWork(0, false, List.of()),
+                new SiblingPickerSummary(0, emptyBreakdown()));
+        assertThat(out.signalKinds()).containsEntry("isInactive", SignalKind.OPERATOR_OVERRIDE);
+        assertThat(out.signalKinds()).containsEntry("pickerStatusOffline", SignalKind.STAGE);
+    }
+
+    @Test
+    void allKnownPickerSignalsClassified() {
+        java.util.Set<String> classifiedNames = DiagnosePickerQueueTool.SIGNAL_KINDS.keySet();
+        java.util.List<String> declaredFields = java.util.Arrays.stream(
+                        PickerWorkflowSignals.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName)
+                .filter(n -> !"derivationNotes".equals(n) && !"signalKinds".equals(n))
+                .toList();
+        for (String field : declaredFields) {
+            assertThat(classifiedNames)
+                    .as("PickerWorkflowSignals field '%s' must have an entry in SIGNAL_KINDS", field)
+                    .contains(field);
+        }
     }
 
     @Test

@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusBreakdown;
 import com.gdn.opsvision.mcp.dto.PickerOperationalStage;
+import com.gdn.opsvision.mcp.dto.SignalKind;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.AvailableWork;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.PickListSummary;
@@ -41,6 +42,26 @@ public class DiagnosePickerQueueTool {
 
     private static final String PICKER_STATUS_SOURCE_REF =
             "stockholm/InventoryUtilities/src/main/java/com/gdn/inventory/type/PickerStatus.java";
+
+    /** Signal-name → {@link SignalKind} for this tool. Tested for full coverage. */
+    static final Map<String, SignalKind> SIGNAL_KINDS = Map.<String, SignalKind>ofEntries(
+            // Operator-controlled overrides on the picker.
+            Map.entry("isInactive", SignalKind.OPERATOR_OVERRIDE),
+            Map.entry("isDeleted",  SignalKind.OPERATOR_OVERRIDE),
+            // Internal blockers — picker config gaps.
+            Map.entry("hasNoZoneGroupMemberships",  SignalKind.BLOCKER_INTERNAL),
+            Map.entry("hasZoneGroupsButNoZones",    SignalKind.BLOCKER_INTERNAL),
+            // Stage indicators — picker's current operational state.
+            Map.entry("pickerExists",          SignalKind.STAGE),
+            Map.entry("pickerStatusAvailable", SignalKind.STAGE),
+            Map.entry("pickerStatusBusy",      SignalKind.STAGE),
+            Map.entry("pickerStatusOffline",   SignalKind.STAGE),
+            Map.entry("pickerStatusOnBreak",   SignalKind.STAGE),
+            // Context — queue / peer shape; supplementary.
+            Map.entry("noOpenUnassignedPickListsInPickerZones", SignalKind.CONTEXT),
+            Map.entry("openPickListsExistInPickerZones",        SignalKind.CONTEXT),
+            Map.entry("isOnlyPickerForOwnZoneGroups",           SignalKind.CONTEXT),
+            Map.entry("siblingPickersAllNonAvailable",          SignalKind.CONTEXT));
 
     /** Internal: stage + one-line meaning per picker.status value. */
     private record PickerStatusInfo(PickerOperationalStage stage, String meaning) {
@@ -325,6 +346,22 @@ public class DiagnosePickerQueueTool {
                 "TRUE iff siblingCount>0 AND siblingStatusBreakdown.available==0. siblingCount="
                         + siblingCount + ", available=" + sb.available() + ".");
 
+        // Build active-only signalKinds map.
+        Map<String, SignalKind> kinds = new LinkedHashMap<>();
+        addIfTrue(kinds, "pickerExists", true);
+        addIfTrue(kinds, "isInactive", !p.active());
+        addIfTrue(kinds, "isDeleted",  p.deleted());
+        addIfTrue(kinds, "hasNoZoneGroupMemberships", hasNoMemberships);
+        addIfTrue(kinds, "hasZoneGroupsButNoZones",   hasGroupsButNoZones);
+        addIfTrue(kinds, "pickerStatusAvailable", "AVAILABLE".equals(s));
+        addIfTrue(kinds, "pickerStatusBusy",      "BUSY".equals(s));
+        addIfTrue(kinds, "pickerStatusOffline",   "OFFLINE".equals(s));
+        addIfTrue(kinds, "pickerStatusOnBreak",   isOnBreak);
+        addIfTrue(kinds, "noOpenUnassignedPickListsInPickerZones", noOpen);
+        addIfTrue(kinds, "openPickListsExistInPickerZones",        openExist);
+        addIfTrue(kinds, "isOnlyPickerForOwnZoneGroups",           isOnlyPicker);
+        addIfTrue(kinds, "siblingPickersAllNonAvailable",          siblingsAllNonAvail);
+
         return new PickerWorkflowSignals(
                 /*pickerExists=*/true,
                 !p.active(),
@@ -339,7 +376,18 @@ public class DiagnosePickerQueueTool {
                 openExist,
                 isOnlyPicker,
                 siblingsAllNonAvail,
-                notes);
+                notes,
+                kinds);
+    }
+
+    private static void addIfTrue(Map<String, SignalKind> kinds, String name, boolean value) {
+        if (!value) {
+            return;
+        }
+        SignalKind kind = SIGNAL_KINDS.get(name);
+        if (kind != null) {
+            kinds.put(name, kind);
+        }
     }
 
     static PickerStatusInterpretation buildPickerStatusInterpretation(String status) {
@@ -364,7 +412,7 @@ public class DiagnosePickerQueueTool {
                         false, false, false, false,
                         false, false, false, false,
                         false, false, false, false,
-                        Map.of()),
+                        Map.of(), Map.of()),
                 null);
     }
 }

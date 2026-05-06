@@ -14,6 +14,7 @@ import com.gdn.opsvision.mcp.dto.InventoryForItemEvidence.WarehouseItemMaster;
 import com.gdn.opsvision.mcp.dto.LifecycleStage;
 import com.gdn.opsvision.mcp.dto.PackingOrderLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickListLifecycleStage;
+import com.gdn.opsvision.mcp.dto.SignalKind;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.DemandShortage;
@@ -71,6 +72,51 @@ public class DiagnosePickPackageTool {
             "stockholm/InventoryModel/src/main/java/com/gdn/inventory/entity/PriorityCalStatus.java";
     private static final String PP_STATUS_SOURCE_REF =
             "stockholm/InventoryUtilities/src/main/java/com/gdn/inventory/type/PickPackageStatus.java";
+
+    /**
+     * Signal-name → {@link SignalKind} classification. The kinds encode the dominance
+     * hierarchy: OPERATOR_OVERRIDE before BLOCKER_* before STAGE before CONTEXT.
+     *
+     * <p>Every WorkflowSignals boolean field has an entry here. The
+     * {@code allKnownSignalsClassified} test asserts coverage; CI fails if a new
+     * signal field lacks a kind.
+     */
+    static final Map<String, SignalKind> SIGNAL_KINDS = Map.<String, SignalKind>ofEntries(
+            // Operator-controlled overrides — explicit human/system overrides on the PP.
+            Map.entry("isCanceled",          SignalKind.OPERATOR_OVERRIDE),
+            Map.entry("isDeprioritized",     SignalKind.OPERATOR_OVERRIDE),
+            Map.entry("isRejected",          SignalKind.OPERATOR_OVERRIDE),
+            Map.entry("isPriorityBoosted",   SignalKind.OPERATOR_OVERRIDE),
+            Map.entry("isAlreadyAssigned",   SignalKind.OPERATOR_OVERRIDE),
+            Map.entry("isCancellationPending", SignalKind.OPERATOR_OVERRIDE),
+            // External blockers — third-party / upstream waits.
+            Map.entry("isStorageNotAvailable",    SignalKind.BLOCKER_EXTERNAL),
+            Map.entry("isAwaitingPutaway",        SignalKind.BLOCKER_EXTERNAL),
+            Map.entry("isAwbPending",             SignalKind.BLOCKER_EXTERNAL),
+            Map.entry("isShipmentBookingFailed",  SignalKind.BLOCKER_EXTERNAL),
+            Map.entry("isWaitingForShipmentRequest", SignalKind.BLOCKER_EXTERNAL),
+            // Internal blockers — system / config issues.
+            Map.entry("isInProblemSolve",                       SignalKind.BLOCKER_INTERNAL),
+            Map.entry("isPriorityCalPending",                   SignalKind.BLOCKER_INTERNAL),
+            Map.entry("hasNoEligiblePickerForAnyOpenPickList",  SignalKind.BLOCKER_INTERNAL),
+            Map.entry("hasEligiblePickersButNoneAvailable",     SignalKind.BLOCKER_INTERNAL),
+            Map.entry("hasReplenishmentDeficit",                SignalKind.BLOCKER_INTERNAL),
+            Map.entry("packingOrderMissing",                    SignalKind.BLOCKER_INTERNAL),
+            // Stage indicators — current lifecycle position.
+            Map.entry("isPartialPackage",        SignalKind.STAGE),
+            Map.entry("isReadyForManualPicking", SignalKind.STAGE),
+            Map.entry("isReachedToQc",           SignalKind.STAGE),
+            Map.entry("isPickingComplete",       SignalKind.STAGE),
+            Map.entry("isWeightCapturePending",  SignalKind.STAGE),
+            Map.entry("isWeightCaptureDone",     SignalKind.STAGE),
+            Map.entry("isGinComplete",           SignalKind.STAGE),
+            Map.entry("isPartialGinComplete",    SignalKind.STAGE),
+            Map.entry("isAwbReceived",           SignalKind.STAGE),
+            Map.entry("isAddedToShipmentRequest", SignalKind.STAGE),
+            // Context — supplementary information about queue/batch shape.
+            Map.entry("hasAnyOpenPickList",      SignalKind.CONTEXT),
+            Map.entry("hasMultipleSourceAreas",  SignalKind.CONTEXT),
+            Map.entry("isInBatchOrWave",         SignalKind.CONTEXT));
 
     /** Internal: lifecycle stage + one-line meaning per status value. */
     private record StatusInfo(LifecycleStage stage, String meaning) {
@@ -596,6 +642,39 @@ public class DiagnosePickPackageTool {
                         + ", packingOrder.present=" + packingOrderPresent
                         + ". Pattern C downstream confirmation.");
 
+        // Build active-only signalKinds: only signals that are TRUE get an entry.
+        Map<String, SignalKind> kinds = new LinkedHashMap<>();
+        addIfTrue(kinds, "isCanceled", isCanceled);
+        addIfTrue(kinds, "isDeprioritized", isDeprioritized);
+        addIfTrue(kinds, "isRejected", isRejected);
+        addIfTrue(kinds, "isPriorityBoosted", isPriorityBoosted);
+        addIfTrue(kinds, "isAlreadyAssigned", isAssigned);
+        addIfTrue(kinds, "isInProblemSolve", "PROBLEM_SOLVE".equals(ps));
+        addIfTrue(kinds, "isStorageNotAvailable", "STORAGE_NOT_AVAILABLE".equals(ps));
+        addIfTrue(kinds, "isAwaitingPutaway", "WAITING_FOR_PUTAWAY".equals(ps));
+        addIfTrue(kinds, "isPriorityCalPending", "PRIORITY_CAL_PENDING".equals(ps));
+        addIfTrue(kinds, "isPartialPackage", "PARTIAL_PACKAGE".equals(ps));
+        addIfTrue(kinds, "isReadyForManualPicking", "READY_FOR_MANUAL_PICKING".equals(ps));
+        addIfTrue(kinds, "isReachedToQc", "REACHED_TO_QC".equals(ps));
+        addIfTrue(kinds, "isPickingComplete", "PICKING_COMPLETE".equals(ps));
+        addIfTrue(kinds, "isWeightCapturePending",  statusInt == 1);
+        addIfTrue(kinds, "isWeightCaptureDone",     statusInt == 2);
+        addIfTrue(kinds, "isGinComplete",           statusInt == 3);
+        addIfTrue(kinds, "isPartialGinComplete",    statusInt == 8);
+        addIfTrue(kinds, "isAwbPending",            statusInt == 4);
+        addIfTrue(kinds, "isAwbReceived",           statusInt == 5);
+        addIfTrue(kinds, "isShipmentBookingFailed", statusInt == 6);
+        addIfTrue(kinds, "isAddedToShipmentRequest", statusInt == 7);
+        addIfTrue(kinds, "isWaitingForShipmentRequest", statusInt == 9);
+        addIfTrue(kinds, "isCancellationPending",   statusInt == 10);
+        addIfTrue(kinds, "hasAnyOpenPickList", hasOpenPl);
+        addIfTrue(kinds, "hasNoEligiblePickerForAnyOpenPickList", hasNoEligibleForAnyOpen);
+        addIfTrue(kinds, "hasEligiblePickersButNoneAvailable", anyOpenHasEligibleNoneAvailable);
+        addIfTrue(kinds, "hasReplenishmentDeficit", hasReplenishmentDeficit);
+        addIfTrue(kinds, "hasMultipleSourceAreas", hasMultipleSourceAreas);
+        addIfTrue(kinds, "isInBatchOrWave", inBatch);
+        addIfTrue(kinds, "packingOrderMissing", packingOrderMissing);
+
         return new WorkflowSignals(
                 // picking_status booleans
                 isCanceled,
@@ -630,7 +709,19 @@ public class DiagnosePickPackageTool {
                 hasMultipleSourceAreas,
                 inBatch,
                 packingOrderMissing,
-                notes);
+                notes,
+                kinds);
+    }
+
+    /** Add the signal name → its known kind to the map iff the signal is TRUE. */
+    private static void addIfTrue(Map<String, SignalKind> kinds, String name, boolean value) {
+        if (!value) {
+            return;
+        }
+        SignalKind kind = SIGNAL_KINDS.get(name);
+        if (kind != null) {
+            kinds.put(name, kind);
+        }
     }
 
     // ─── status interpretations (replaces applicableHints) ───────────────────

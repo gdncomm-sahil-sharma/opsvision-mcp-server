@@ -149,7 +149,12 @@ public record PickerQueueDiagnosisEvidence(
             boolean isOnlyPickerForOwnZoneGroups,
             boolean siblingPickersAllNonAvailable,
             // per-derived-signal one-liner
-            Map<String, String> derivationNotes) {
+            Map<String, String> derivationNotes,
+            // Per-signal classification — only TRUE-signal entries emitted. Lets the
+            // agent lead with OPERATOR_OVERRIDE (e.g. inactive/deleted) before
+            // BLOCKER_INTERNAL (e.g. no zone groups) before STAGE (picker status) before
+            // CONTEXT (queue shape).
+            Map<String, SignalKind> signalKinds) {
     }
 
     /**
