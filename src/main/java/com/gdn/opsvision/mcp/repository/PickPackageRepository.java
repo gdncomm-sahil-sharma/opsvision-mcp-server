@@ -47,7 +47,7 @@ public class PickPackageRepository {
     }
 
     public List<PickPackageEvidence.HandlingUnit> findHandlingUnits(long pickPackageId) {
-        return stockholm.sql("""
+        List<HandlingUnitRow> raws = stockholm.sql("""
                         SELECT id, pick_package, handling_unit_code, handling_unit_type_code,
                                status, target_area_code, target_section_code,
                                drop_point_code, drop_point_area,
@@ -60,8 +60,49 @@ public class PickPackageRepository {
                         ORDER BY id
                         """)
                 .param("pp", pickPackageId)
-                .query(PickPackageEvidence.HandlingUnit.class)
+                .query(HandlingUnitRow.class)
                 .list();
+        List<PickPackageEvidence.HandlingUnit> out = new java.util.ArrayList<>(raws.size());
+        for (HandlingUnitRow r : raws) {
+            com.gdn.opsvision.mcp.dto.HandlingUnitLifecycleStage stage =
+                    com.gdn.opsvision.mcp.dto.HandlingUnitLifecycleStage.forStatus(r.status());
+            boolean wcsStuck = "WCS".equalsIgnoreCase(r.automation())
+                    && "PICKING_COMPLETE".equals(r.status())
+                    && !Boolean.TRUE.equals(r.selectedForPacking());
+            out.add(new PickPackageEvidence.HandlingUnit(
+                    r.id(), r.pickPackage(), r.handlingUnitCode(), r.handlingUnitTypeCode(),
+                    r.status(), stage,
+                    r.targetAreaCode(), r.targetSectionCode(),
+                    r.dropPointCode(), r.dropPointArea(),
+                    r.transitDropPointCode(), r.transitDropPointArea(),
+                    r.automation(), r.ptlConsolidationStatus(), r.consolidationRequired(),
+                    r.selectedForPacking(), wcsStuck,
+                    r.handlingUnitGroup(), r.lastModifiedBy(), r.lastModifiedDate()));
+        }
+        return out;
+    }
+
+    /** Raw row shape; tool layer would also work but folding into the repo keeps the
+     *  HandlingUnit DTO consistent across all callers. */
+    public record HandlingUnitRow(
+            long id,
+            long pickPackage,
+            String handlingUnitCode,
+            String handlingUnitTypeCode,
+            String status,
+            String targetAreaCode,
+            String targetSectionCode,
+            String dropPointCode,
+            String dropPointArea,
+            String transitDropPointCode,
+            String transitDropPointArea,
+            String automation,
+            String ptlConsolidationStatus,
+            Boolean consolidationRequired,
+            Boolean selectedForPacking,
+            String handlingUnitGroup,
+            String lastModifiedBy,
+            java.time.Instant lastModifiedDate) {
     }
 
     /**

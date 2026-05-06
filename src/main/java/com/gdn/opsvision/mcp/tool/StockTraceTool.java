@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.tool;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -8,9 +9,12 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
 
+import com.gdn.opsvision.mcp.dto.OutboundStockLifecycleStage;
 import com.gdn.opsvision.mcp.dto.StockTraceEvidence;
 import com.gdn.opsvision.mcp.dto.StockTraceEvidence.Mutation;
+import com.gdn.opsvision.mcp.dto.StockTraceEvidence.OutboundLifecycleProgression;
 import com.gdn.opsvision.mcp.repository.StockHistoryRepository;
+import com.gdn.opsvision.mcp.repository.StockHistoryRepository.MutationRow;
 
 @Service
 public class StockTraceTool {
@@ -51,24 +55,40 @@ public class StockTraceTool {
     public StockTraceEvidence getStockTrace(
             @ToolParam(description = "stock_trace_id UUID") String traceId) {
         if (traceId == null || traceId.isBlank()) {
-            return new StockTraceEvidence(traceId, 0, false, Map.of(), Map.of(), List.of());
+            return new StockTraceEvidence(traceId, 0, false, Map.of(), Map.of(),
+                    OutboundStockLifecycleStage.computeProgression(List.of()), List.of());
         }
-        List<Mutation> rows = repo.findByTrace(traceId.trim());
-        boolean truncated = rows.size() > repo.hardCap();
+        List<MutationRow> rawRows = repo.findByTrace(traceId.trim());
+        boolean truncated = rawRows.size() > repo.hardCap();
         if (truncated) {
-            rows = rows.subList(0, repo.hardCap());
+            rawRows = rawRows.subList(0, repo.hardCap());
         }
         Map<String, Long> byAction = new LinkedHashMap<>();
         Map<String, Long> byRefType = new LinkedHashMap<>();
-        for (Mutation m : rows) {
+        List<String> actionTypes = new ArrayList<>(rawRows.size());
+        List<Mutation> mutations = new ArrayList<>(rawRows.size());
+        for (MutationRow m : rawRows) {
             if (m.stockActionType() != null) {
                 byAction.merge(m.stockActionType(), 1L, Long::sum);
+                actionTypes.add(m.stockActionType());
             }
             if (m.referenceType() != null) {
                 byRefType.merge(m.referenceType(), 1L, Long::sum);
             }
+            OutboundStockLifecycleStage stage = OutboundStockLifecycleStage.forActionType(
+                    m.stockActionType());
+            mutations.add(new Mutation(
+                    m.id(), m.createdDate(), m.createdBy(),
+                    m.warehouseItemMaster(), m.binCode(),
+                    m.externalReferenceId(), m.parentReferenceId(), m.parentReferenceType(),
+                    m.referenceId(), m.referenceType(),
+                    m.processType(), m.stockActionType(), stage,
+                    m.transactionQuantity(), m.oldQuantity(), m.newQuantity()));
         }
+        OutboundLifecycleProgression progression =
+                OutboundStockLifecycleStage.computeProgression(actionTypes);
         return new StockTraceEvidence(
-                traceId.trim(), rows.size(), truncated, byAction, byRefType, rows);
+                traceId.trim(), mutations.size(), truncated, byAction, byRefType,
+                progression, mutations);
     }
 }

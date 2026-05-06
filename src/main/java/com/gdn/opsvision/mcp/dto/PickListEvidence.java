@@ -18,6 +18,7 @@ public record PickListEvidence(
             long warehouseId,
             Long pickerId,
             String status,
+            PickListLifecycleStage lifecycleStage,
             Long allottedZone,
             Long priority,
             Long pickingPriorityLevel,

@@ -8,13 +8,17 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
 
+import com.gdn.opsvision.mcp.dto.OutboundStockLifecycleStage;
 import com.gdn.opsvision.mcp.dto.StockHistoryEvidence;
 import com.gdn.opsvision.mcp.dto.StockHistoryEvidence.ActionGroup;
 import com.gdn.opsvision.mcp.dto.StockHistoryEvidence.DecrementEvent;
 import com.gdn.opsvision.mcp.dto.StockHistoryEvidence.WimEvidence;
+import com.gdn.opsvision.mcp.dto.StockTraceEvidence.OutboundLifecycleProgression;
 import com.gdn.opsvision.mcp.repository.InventoryRepository;
 import com.gdn.opsvision.mcp.repository.InventoryRepository.WimRef;
 import com.gdn.opsvision.mcp.repository.StockHistoryRepository;
+import com.gdn.opsvision.mcp.repository.StockHistoryRepository.ActionGroupRow;
+import com.gdn.opsvision.mcp.repository.StockHistoryRepository.DecrementEventRow;
 import com.gdn.opsvision.mcp.tool.util.IsoBound;
 
 @Service
@@ -90,23 +94,52 @@ public class GetStockHistoryForItemTool {
         List<WimRef> wims = inventoryRepo.findWimsBySkuAndSite(skuCode, siteCode);
         List<WimEvidence> out = new ArrayList<>(wims.size());
         for (WimRef w : wims) {
-            List<ActionGroup> grouped = stockHistoryRepo.findGroupedByActionForWim(
+            List<ActionGroupRow> rawGroups = stockHistoryRepo.findGroupedByActionForWim(
                     w.wimId(), windowStart, windowEnd);
             long totalEvents = stockHistoryRepo.countEventsForWim(
                     w.wimId(), windowStart, windowEnd);
-            List<DecrementEvent> recent = stockHistoryRepo.findRecentDecrementsForWim(
+            List<DecrementEventRow> rawDecrements = stockHistoryRepo.findRecentDecrementsForWim(
                     w.wimId(), windowStart, windowEnd, effectiveLimit + 1);
-            boolean truncated = recent.size() > effectiveLimit;
+            boolean truncated = rawDecrements.size() > effectiveLimit;
             if (truncated) {
-                recent = recent.subList(0, effectiveLimit);
+                rawDecrements = rawDecrements.subList(0, effectiveLimit);
             }
+            // Attach lifecycle stage + build progression. ActionGroup carries the count
+            // per (process_type, stock_action_type), so a stage's contribution to the
+            // progression is the SUM of eventCounts for all groups that map to that stage.
+            List<ActionGroup> grouped = new ArrayList<>(rawGroups.size());
+            List<String> windowActionTypes = new ArrayList<>();
+            for (ActionGroupRow g : rawGroups) {
+                OutboundStockLifecycleStage stage =
+                        OutboundStockLifecycleStage.forActionType(g.stockActionType());
+                grouped.add(new ActionGroup(
+                        g.processType(), g.stockActionType(), stage,
+                        g.eventCount(), g.totalTransactionQuantity()));
+                // Repeat the action type once per event so the progression's event-count
+                // tallies match the histogram's eventCount sum.
+                long n = g.eventCount();
+                for (long i = 0; i < n; i++) {
+                    windowActionTypes.add(g.stockActionType());
+                }
+            }
+            List<DecrementEvent> recent = new ArrayList<>(rawDecrements.size());
+            for (DecrementEventRow d : rawDecrements) {
+                recent.add(new DecrementEvent(
+                        d.createdDate(), d.processType(), d.stockActionType(),
+                        OutboundStockLifecycleStage.forActionType(d.stockActionType()),
+                        d.transactionQuantity(), d.oldQuantity(), d.newQuantity(),
+                        d.binCode(), d.referenceId(), d.referenceType(), d.stockTraceId()));
+            }
+            OutboundLifecycleProgression progression =
+                    OutboundStockLifecycleStage.computeProgression(windowActionTypes);
             out.add(new WimEvidence(
                     w.wimId(),
                     w.stockIndicator(),
                     totalEvents,
                     truncated,
                     grouped,
-                    recent));
+                    recent,
+                    progression));
         }
         return new StockHistoryEvidence(skuCode, siteCode, windowStart, windowEnd, out);
     }

@@ -92,6 +92,7 @@ public record PickPackageDiagnosisEvidence(
     public record PickListAllocation(
             long pickListId,
             String pickListStatus,
+            PickListLifecycleStage pickListLifecycleStage,
             Long allottedZoneId,
             String allottedZoneCode,
             Long pickerId,

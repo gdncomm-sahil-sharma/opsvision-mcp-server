@@ -38,12 +38,14 @@ public record StockHistoryEvidence(
             long totalEvents,
             boolean truncated,
             List<ActionGroup> groupedByAction,
-            List<DecrementEvent> recentDecrements) {
+            List<DecrementEvent> recentDecrements,
+            StockTraceEvidence.OutboundLifecycleProgression outboundLifecycle) {
     }
 
     public record ActionGroup(
             String processType,
             String stockActionType,
+            OutboundStockLifecycleStage lifecycleStage,
             long eventCount,
             Long totalTransactionQuantity) {
     }
@@ -52,6 +54,7 @@ public record StockHistoryEvidence(
             Instant createdDate,
             String processType,
             String stockActionType,
+            OutboundStockLifecycleStage lifecycleStage,
             Integer transactionQuantity,
             Integer oldQuantity,
             Integer newQuantity,

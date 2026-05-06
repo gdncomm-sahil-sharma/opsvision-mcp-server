@@ -8,6 +8,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
+import com.gdn.opsvision.mcp.dto.PickListLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.DemandShortage;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickListAllocation;
@@ -190,6 +191,7 @@ class DiagnosePickPackageToolSignalsTest {
     private static PickListAllocation openUnassignedPl(int eligibleCount, int available) {
         return new PickListAllocation(
                 /*pickListId*/ 1L, /*pickListStatus*/ "OPEN",
+                /*pickListLifecycleStage*/ PickListLifecycleStage.OPEN_UNCLAIMED,
                 /*allottedZoneId*/ 100L, /*allottedZoneCode*/ "M4-STO-1W",
                 /*pickerId*/ null, /*pickerCode*/ null, /*pickerStatus*/ null,
                 /*priority*/ 0L, /*pickingPriorityLevelId*/ 1L, /*pickingPriorityPrecedence*/ 0,
@@ -204,7 +206,8 @@ class DiagnosePickPackageToolSignalsTest {
 
     private static PickListAllocation closedPl() {
         return new PickListAllocation(
-                1L, "CLOSED", 100L, "M4-STO-1W",
+                1L, "CLOSED", PickListLifecycleStage.CLOSED,
+                100L, "M4-STO-1W",
                 23L, "PIC-23", "OFFLINE",
                 0L, 1L, 0, 0L, Instant.now(),
                 List.of("M4-STOR"),

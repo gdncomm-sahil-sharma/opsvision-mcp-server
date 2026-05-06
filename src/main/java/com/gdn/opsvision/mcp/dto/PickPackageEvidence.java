@@ -39,12 +39,23 @@ public record PickPackageEvidence(
             Boolean manualTargetArea) {
     }
 
+    /**
+     * One {@code pick_package_handling_units} row plus structured lifecycle context.
+     *
+     * <p>{@code lifecycleStage} maps {@code status} to a {@link HandlingUnitLifecycleStage}
+     * for triage. {@code wcsConsolidationStuck} is the structural Pattern C fingerprint:
+     * {@code automation='WCS' AND status='PICKING_COMPLETE' AND
+     * (selectedForPacking=null||false)} — HU stuck at consolidation without packing
+     * handoff. It's a derived boolean; the values feeding it are also surfaced so the
+     * agent can verify.
+     */
     public record HandlingUnit(
             long id,
             long pickPackage,
             String handlingUnitCode,
             String handlingUnitTypeCode,
             String status,
+            HandlingUnitLifecycleStage lifecycleStage,
             String targetAreaCode,
             String targetSectionCode,
             String dropPointCode,
@@ -55,6 +66,7 @@ public record PickPackageEvidence(
             String ptlConsolidationStatus,
             Boolean consolidationRequired,
             Boolean selectedForPacking,
+            boolean wcsConsolidationStuck,
             String handlingUnitGroup,
             String lastModifiedBy,
             Instant lastModifiedDate) {

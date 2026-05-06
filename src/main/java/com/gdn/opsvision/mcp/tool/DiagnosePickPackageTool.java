@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import com.gdn.opsvision.mcp.dto.InventoryForItemEvidence.WarehouseItemMaster;
 import com.gdn.opsvision.mcp.dto.LifecycleStage;
+import com.gdn.opsvision.mcp.dto.PickListLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.DemandShortage;
@@ -233,6 +234,7 @@ public class DiagnosePickPackageTool {
             pickListAllocations.add(new PickListAllocation(
                     pl.pickListId(),
                     pl.pickListStatus(),
+                    PickListLifecycleStage.forStatusAndPicker(pl.pickListStatus(), pl.pickerId()),
                     pl.allottedZoneId(),
                     pl.allottedZoneCode(),
                     pl.pickerId(),

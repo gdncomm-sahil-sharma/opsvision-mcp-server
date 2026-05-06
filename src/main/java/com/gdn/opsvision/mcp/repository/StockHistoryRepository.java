@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -11,9 +12,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.gdn.opsvision.mcp.dto.StockHistoryEvidence.ActionGroup;
-import com.gdn.opsvision.mcp.dto.StockHistoryEvidence.DecrementEvent;
-import com.gdn.opsvision.mcp.dto.StockTraceEvidence.Mutation;
+// Repos return DB-shaped rows; tools layer attaches lifecycle stage via mapping helpers.
 
 /**
  * Reads {@code stock_history} rows for a {@code stock_trace_id}. Some traces have hundreds
@@ -36,7 +35,7 @@ public class StockHistoryRepository {
         this.inventory = inventory;
     }
 
-    public List<Mutation> findByTrace(String traceId) {
+    public List<MutationRow> findByTrace(String traceId) {
         return inventory.sql("""
                         SELECT id,
                                created_date,
@@ -60,8 +59,27 @@ public class StockHistoryRepository {
                         """)
                 .param("trace", traceId)
                 .param("cap", MAX_EVENTS + 1)
-                .query(Mutation.class)
+                .query(MutationRow.class)
                 .list();
+    }
+
+    /** Raw row shape; tool layer maps to {@code StockTraceEvidence.Mutation} + lifecycleStage. */
+    public record MutationRow(
+            long id,
+            Instant createdDate,
+            String createdBy,
+            Long warehouseItemMaster,
+            String binCode,
+            String externalReferenceId,
+            String parentReferenceId,
+            String parentReferenceType,
+            String referenceId,
+            String referenceType,
+            String processType,
+            String stockActionType,
+            Integer transactionQuantity,
+            Integer oldQuantity,
+            Integer newQuantity) {
     }
 
     public int hardCap() {
@@ -108,7 +126,7 @@ public class StockHistoryRepository {
      * <p>Note: {@code stock_history.created_date} is {@code timestamp without time zone};
      * we bind {@link LocalDateTime}.
      */
-    public List<ActionGroup> findGroupedByActionForWim(
+    public List<ActionGroupRow> findGroupedByActionForWim(
             long wimId, LocalDateTime since, LocalDateTime until) {
         return inventory.sql("""
                         SELECT process_type,
@@ -125,8 +143,16 @@ public class StockHistoryRepository {
                 .param("wimId", wimId)
                 .param("since", since)
                 .param("until", until)
-                .query(ActionGroup.class)
+                .query(ActionGroupRow.class)
                 .list();
+    }
+
+    /** Raw row shape for grouped histogram; tool layer attaches lifecycleStage. */
+    public record ActionGroupRow(
+            String processType,
+            String stockActionType,
+            long eventCount,
+            Long totalTransactionQuantity) {
     }
 
     /**
@@ -156,7 +182,7 @@ public class StockHistoryRepository {
      * truncation. Backslash-underscore escape on the LIKE pattern is required because
      * {@code _} is a wildcard.
      */
-    public List<DecrementEvent> findRecentDecrementsForWim(
+    public List<DecrementEventRow> findRecentDecrementsForWim(
             long wimId, LocalDateTime since, LocalDateTime until, int limit) {
         return inventory.sql("""
                         SELECT created_date,
@@ -181,7 +207,21 @@ public class StockHistoryRepository {
                 .param("since", since)
                 .param("until", until)
                 .param("lim", limit)
-                .query(DecrementEvent.class)
+                .query(DecrementEventRow.class)
                 .list();
+    }
+
+    /** Raw row shape for recent decrements; tool layer attaches lifecycleStage. */
+    public record DecrementEventRow(
+            Instant createdDate,
+            String processType,
+            String stockActionType,
+            Integer transactionQuantity,
+            Integer oldQuantity,
+            Integer newQuantity,
+            String binCode,
+            String referenceId,
+            String referenceType,
+            String stockTraceId) {
     }
 }
