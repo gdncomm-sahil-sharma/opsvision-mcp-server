@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import com.gdn.opsvision.mcp.dto.InventoryForItemEvidence.WarehouseItemMaster;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.DemandShortage;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.InterpretiveHints;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickListAllocation;
@@ -24,6 +25,7 @@ import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.SourceAreaCoverage
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.WorkflowSignals;
 import com.gdn.opsvision.mcp.repository.InventoryRepository;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository;
+import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.BatchSiblingRow;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.DemandRow;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.PickListAllocationRow;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.PpPriorityRow;
@@ -40,6 +42,40 @@ import com.gdn.opsvision.mcp.repository.PickerAccessRepository.ZoneRow;
  */
 @Service
 public class DiagnosePickPackageTool {
+
+    /**
+     * {@code PickPackageStatus} enum mapped by ordinal. Hibernate persists pp.status as
+     * EnumType.ORDINAL (the entity has no @Enumerated; default is ORDINAL). Verified
+     * against QA2: status=4 → AWB_PENDING, 6 → SHIPMENT_BOOKING_FAILED, 9 →
+     * WAITING_FOR_SHIPMENT_REQUEST, etc.
+     */
+    private static final String[] PP_STATUS_LABELS = {
+            "OPEN",                          // 0
+            "WEIGHT_CAPTURE_PENDING",        // 1
+            "WEIGHT_CAPTURE_DONE",           // 2
+            "GIN_COMPLETE",                  // 3
+            "AWB_PENDING",                   // 4
+            "AWB_RECEIVED",                  // 5
+            "SHIPMENT_BOOKING_FAILED",       // 6
+            "ADDED_TO_SHIPMENT_REQUEST",     // 7
+            "PARTIAL_GIN_COMPLETE",          // 8
+            "WAITING_FOR_SHIPMENT_REQUEST",  // 9
+            "CANCELLATION_PENDING"           // 10
+    };
+
+    /** Plain-English meaning for each {@code PickPackageStatus} ordinal. */
+    private static final Map<String, String> PP_STATUS_MEANING = Map.ofEntries(
+            Map.entry("OPEN", "Default state — PP is open. picking_status carries the active sub-state."),
+            Map.entry("WEIGHT_CAPTURE_PENDING", "PP picked + at packing station; awaiting weight capture before GIN."),
+            Map.entry("WEIGHT_CAPTURE_DONE", "Weight captured; ready for GIN."),
+            Map.entry("GIN_COMPLETE", "Goods Issue Note submitted; downstream of picking."),
+            Map.entry("AWB_PENDING", "Awaiting AWB (airway bill) from logistics provider. Picking is done. Not a picking issue."),
+            Map.entry("AWB_RECEIVED", "AWB received from logistics; ready for shipment-request creation."),
+            Map.entry("SHIPMENT_BOOKING_FAILED", "Shipment booking with logistics provider failed (operational/third-party). Check logistic_option_code + AWB info; likely needs a retry, not a picking fix."),
+            Map.entry("ADDED_TO_SHIPMENT_REQUEST", "PP attached to a shipment request; awaiting carrier handoff."),
+            Map.entry("PARTIAL_GIN_COMPLETE", "Partial GIN issued (split shipment); remaining items still in flight."),
+            Map.entry("WAITING_FOR_SHIPMENT_REQUEST", "Downstream of picking. Outbound shipment-request creation hasn't run yet — waiting on logistics-side workflow."),
+            Map.entry("CANCELLATION_PENDING", "PP-level cancellation initiated; awaiting confirmation before stock/state release."));
 
     /** Plain-English meaning for each {@code PriorityCalStatus} value the PP can carry. */
     private static final Map<String, String> PICKING_STATUS_MEANING = Map.ofEntries(
@@ -192,11 +228,14 @@ public class DiagnosePickPackageTool {
         // §5 replenishment / SNA — per-SKU deficit
         ReplenishmentSignal replenishment = computeReplenishment(ppId, s);
 
+        // §5b batch / wave consolidation — sibling breakdown
+        BatchConsolidation batchConsolidation = computeBatchConsolidation(ppId, s);
+
         // §6 derived booleans
-        WorkflowSignals signals = computeSignals(s, pickListAllocations, replenishment, distinctSourceAreas);
+        WorkflowSignals signals = computeSignals(s, pickListAllocations, replenishment, distinctSourceAreas, batchConsolidation);
 
         // §7 hints
-        InterpretiveHints hints = buildHints(s.pickingStatus(), signals);
+        InterpretiveHints hints = buildHints(s.pickingStatus(), state.statusLabel(), signals, batchConsolidation);
 
         return new PickPackageDiagnosisEvidence(
                 s.ppCode(),
@@ -206,6 +245,7 @@ public class DiagnosePickPackageTool {
                 pickListAllocations,
                 sourceAreas,
                 replenishment,
+                batchConsolidation,
                 signals,
                 hints);
     }
@@ -229,6 +269,7 @@ public class DiagnosePickPackageTool {
                 s.ppId(),
                 s.ppCode(),
                 s.status(),
+                statusLabel(s.status()),
                 s.pickingStatus(),
                 s.canceled(),
                 s.inProgress(),
@@ -240,10 +281,20 @@ public class DiagnosePickPackageTool {
                 s.assignedPickerCode(),
                 s.assignedPickerDate(),
                 s.distributionZoneCode(),
+                s.batchId(),
+                s.batchType(),
+                s.waveNumber(),
                 s.createdDate(),
                 s.updatedDate(),
                 s.autoCancelDate(),
                 s.siteCode());
+    }
+
+    private static String statusLabel(int status) {
+        if (status >= 0 && status < PP_STATUS_LABELS.length) {
+            return PP_STATUS_LABELS[status];
+        }
+        return "STATUS_" + status;
     }
 
     private PickPackagePriority mapPriority(PpPriorityRow p) {
@@ -260,7 +311,7 @@ public class DiagnosePickPackageTool {
 
     private static PickPackageDiagnosisEvidence notFound(String code) {
         return new PickPackageDiagnosisEvidence(
-                code, /*found=*/false, null, null, List.of(), List.of(), null, null, null);
+                code, /*found=*/false, null, null, List.of(), List.of(), null, null, null, null);
     }
 
     // ─── eligible-picker computation ────────────────────────────────────────
@@ -330,14 +381,41 @@ public class DiagnosePickPackageTool {
         return new ReplenishmentSignal(sna, shortages);
     }
 
+    // ─── batch / wave consolidation ─────────────────────────────────────────
+
+    private BatchConsolidation computeBatchConsolidation(long ppId, PpStateRow s) {
+        boolean inBatch = (s.batchId() != null && !s.batchId().isBlank())
+                || (s.waveNumber() != null && !s.waveNumber().isBlank());
+        if (!inBatch) {
+            return new BatchConsolidation(
+                    false, s.batchId(), s.batchType(), s.waveNumber(), 0,
+                    Map.of(), Map.of());
+        }
+        List<BatchSiblingRow> siblings = diagnosisRepo.findBatchSiblings(
+                s.batchId(), s.waveNumber(), ppId);
+        Map<String, Integer> pickingBreakdown = new LinkedHashMap<>();
+        Map<String, Integer> ppStatusBreakdown = new LinkedHashMap<>();
+        for (BatchSiblingRow r : siblings) {
+            String ps = r.pickingStatus() == null ? "(null)" : r.pickingStatus();
+            pickingBreakdown.merge(ps, 1, Integer::sum);
+            String label = statusLabel(r.status());
+            ppStatusBreakdown.merge(label, 1, Integer::sum);
+        }
+        return new BatchConsolidation(
+                true, s.batchId(), s.batchType(), s.waveNumber(),
+                siblings.size(), pickingBreakdown, ppStatusBreakdown);
+    }
+
     // ─── boolean signal derivation ──────────────────────────────────────────
 
     private static WorkflowSignals computeSignals(
             PpStateRow s,
             List<PickListAllocation> allocations,
             ReplenishmentSignal replenishment,
-            List<String> distinctSourceAreas) {
+            List<String> distinctSourceAreas,
+            BatchConsolidation batchConsolidation) {
         String ps = s.pickingStatus() == null ? "" : s.pickingStatus();
+        int statusInt = s.status();
         boolean isCanceled = s.canceled();
         boolean isDeprioritized = Boolean.TRUE.equals(s.deprioritized());
         boolean isRejected = Boolean.TRUE.equals(s.rejected());
@@ -347,11 +425,9 @@ public class DiagnosePickPackageTool {
         boolean hasOpenPl = false;
         boolean allOpenLackEligible = true;
         boolean anyOpenHasEligibleNoneAvailable = false;
-        int openCount = 0;
         for (PickListAllocation a : allocations) {
             if ("OPEN".equalsIgnoreCase(a.pickListStatus()) && a.pickerId() == null) {
                 hasOpenPl = true;
-                openCount++;
                 if (a.eligiblePickerCount() > 0) {
                     allOpenLackEligible = false;
                     if (a.eligiblePickerStatus() != null
@@ -366,6 +442,7 @@ public class DiagnosePickPackageTool {
                 && replenishment.shortages().stream().anyMatch(ds -> ds.deficit() > 0);
 
         return new WorkflowSignals(
+                // picking_status booleans
                 isCanceled,
                 isDeprioritized,
                 isRejected,
@@ -379,21 +456,44 @@ public class DiagnosePickPackageTool {
                 "READY_FOR_MANUAL_PICKING".equals(ps),
                 "REACHED_TO_QC".equals(ps),
                 "PICKING_COMPLETE".equals(ps),
+                // pp.status (PickPackageStatus enum) booleans
+                statusInt == 1,  // WEIGHT_CAPTURE_PENDING
+                statusInt == 2,  // WEIGHT_CAPTURE_DONE
+                statusInt == 3,  // GIN_COMPLETE
+                statusInt == 8,  // PARTIAL_GIN_COMPLETE
+                statusInt == 4,  // AWB_PENDING
+                statusInt == 5,  // AWB_RECEIVED
+                statusInt == 6,  // SHIPMENT_BOOKING_FAILED
+                statusInt == 7,  // ADDED_TO_SHIPMENT_REQUEST
+                statusInt == 9,  // WAITING_FOR_SHIPMENT_REQUEST
+                statusInt == 10, // CANCELLATION_PENDING
+                // derived
                 hasOpenPl,
                 hasNoEligibleForAnyOpen,
                 anyOpenHasEligibleNoneAvailable,
                 hasReplenishmentDeficit,
-                distinctSourceAreas.size() > 1);
+                distinctSourceAreas.size() > 1,
+                batchConsolidation != null && batchConsolidation.inBatch());
     }
 
     // ─── hints ──────────────────────────────────────────────────────────────
 
-    private static InterpretiveHints buildHints(String pickingStatus, WorkflowSignals signals) {
-        String meaning = pickingStatus == null
+    private static InterpretiveHints buildHints(
+            String pickingStatus,
+            String ppStatusLabel,
+            WorkflowSignals signals,
+            BatchConsolidation batchConsolidation) {
+        String pickingMeaning = pickingStatus == null
                 ? null
                 : PICKING_STATUS_MEANING.getOrDefault(pickingStatus,
                         "Unknown picking_status enum value; check PriorityCalStatus.java for additions.");
-        List<String> applicable = new ArrayList<>(3);
+        String ppStatusMeaning = ppStatusLabel == null ? null
+                : PP_STATUS_MEANING.getOrDefault(ppStatusLabel, null);
+        // Compose pickingStatusMeaning to surface BOTH pp.status and picking_status when
+        // the pp.status is post-pick / shipment-pipeline (more informative than picking_status alone).
+        String composed = composeMeaning(pickingMeaning, ppStatusLabel, ppStatusMeaning);
+
+        List<String> applicable = new ArrayList<>();
         if (signals.isReachedToQc() || signals.isPickingComplete()) {
             applicable.add("This PP is past the picking gate. If it appears stuck, the issue is downstream of picking — check handling-unit packing handoff (selected_for_packing / packing_order presence).");
         }
@@ -420,6 +520,41 @@ public class DiagnosePickPackageTool {
         if (signals.isAlreadyAssigned()) {
             applicable.add("PP already has a picker assigned (state.assignedPickerId). It IS being worked; the question may be 'why is it slow' rather than 'why no picker'.");
         }
-        return new InterpretiveHints(meaning, applicable);
+        // pp.status (shipment pipeline) hints — these mean picking is done; defer.
+        if (signals.isAwbPending()) {
+            applicable.add("AWB_PENDING — PP picked + GIN-ready, awaiting AWB from logistics provider. Picking-side answer is 'done'; this is a third-party / outbound pipeline state.");
+        }
+        if (signals.isShipmentBookingFailed()) {
+            applicable.add("SHIPMENT_BOOKING_FAILED — operational/third-party. Check logistic_option_code + AWB info; usually resolved by retry, not a picking fix.");
+        }
+        if (signals.isWaitingForShipmentRequest()) {
+            applicable.add("WAITING_FOR_SHIPMENT_REQUEST — outbound shipment-request creation hasn't run. Downstream of picking; not a picker-queue issue.");
+        }
+        if (signals.isAddedToShipmentRequest()) {
+            applicable.add("ADDED_TO_SHIPMENT_REQUEST — PP attached to a shipment request, awaiting carrier handoff. Picking is done.");
+        }
+        if (signals.isWeightCapturePending()) {
+            applicable.add("WEIGHT_CAPTURE_PENDING — PP at packing station, awaiting weight capture. Picking is done; weighing operator hasn't processed it yet.");
+        }
+        if (signals.isCancellationPending()) {
+            applicable.add("CANCELLATION_PENDING — PP-level cancellation initiated, awaiting confirmation. Don't expect picker activity.");
+        }
+        // batch / wave hints
+        if (batchConsolidation != null && batchConsolidation.inBatch() && batchConsolidation.siblingCount() > 0) {
+            String batchOrWave = batchConsolidation.batchId() != null && !batchConsolidation.batchId().isBlank()
+                    ? "batch"
+                    : "wave";
+            applicable.add("PP is in a multi-PP " + batchOrWave + " (" + batchConsolidation.siblingCount() +
+                    " siblings). Inspect batchConsolidation.siblingPickingStatusBreakdown — if most siblings are at REACHED_TO_QC and this PP isn't, it's behind the wave; if this PP is REACHED_TO_QC and siblings aren't, the batch is waiting on stragglers.");
+        }
+        return new InterpretiveHints(composed, applicable);
+    }
+
+    private static String composeMeaning(String pickingMeaning, String ppStatusLabel, String ppStatusMeaning) {
+        if (ppStatusLabel != null && !"OPEN".equals(ppStatusLabel) && ppStatusMeaning != null) {
+            return "[pp.status=" + ppStatusLabel + "] " + ppStatusMeaning
+                    + (pickingMeaning != null ? " | [picking_status] " + pickingMeaning : "");
+        }
+        return pickingMeaning;
     }
 }

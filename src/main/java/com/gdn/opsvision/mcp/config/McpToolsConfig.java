@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.gdn.opsvision.mcp.tool.DiagnosePickPackageTool;
+import com.gdn.opsvision.mcp.tool.DiagnosePickerQueueTool;
 import com.gdn.opsvision.mcp.tool.FindPickingTaskRequestsTool;
 import com.gdn.opsvision.mcp.tool.FindPickingTasksTool;
 import com.gdn.opsvision.mcp.tool.GetSalesOrderTool;
@@ -38,14 +39,15 @@ public class McpToolsConfig {
             FindPickingTaskRequestsTool findPickingTaskRequestsTool,
             GetSalesOrderTool getSalesOrderTool,
             GetStockHistoryForItemTool getStockHistoryForItemTool,
-            DiagnosePickPackageTool diagnosePickPackageTool) {
+            DiagnosePickPackageTool diagnosePickPackageTool,
+            DiagnosePickerQueueTool diagnosePickerQueueTool) {
         return MethodToolCallbackProvider.builder()
                 .toolObjects(pickPackageTool, pickListTool, pickListReadinessTool,
                         inventoryForItemTool, reconciliationTool, stockTraceTool,
                         movementHistoryTool, findPickingTasksTool,
                         findPickingTaskRequestsTool,
                         getSalesOrderTool, getStockHistoryForItemTool,
-                        diagnosePickPackageTool)
+                        diagnosePickPackageTool, diagnosePickerQueueTool)
                 .build();
     }
 }

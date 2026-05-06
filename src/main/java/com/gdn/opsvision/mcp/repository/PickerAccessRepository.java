@@ -3,6 +3,7 @@ package com.gdn.opsvision.mcp.repository;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -166,6 +167,180 @@ public class PickerAccessRepository {
         return aheadCount.intValue() + 1;
     }
 
+    /** Slim picker lookup by code (e.g. 'PIC-0000023391') or numeric id. */
+    public Optional<PickerStateRow> findPickerByCode(String code) {
+        return stockholm.sql("""
+                        SELECT p.id, p.code, p.name, p.warehouse AS warehouse_id,
+                               w.code AS warehouse_code, p.status, p.last_login_time,
+                               p.active, p.deleted, p.type
+                          FROM picker p
+                          LEFT JOIN warehouse w ON w.id = p.warehouse
+                         WHERE p.code = :code
+                        """)
+                .param("code", code)
+                .query(PickerStateRow.class)
+                .optional();
+    }
+
+    public Optional<PickerStateRow> findPickerById(long id) {
+        return stockholm.sql("""
+                        SELECT p.id, p.code, p.name, p.warehouse AS warehouse_id,
+                               w.code AS warehouse_code, p.status, p.last_login_time,
+                               p.active, p.deleted, p.type
+                          FROM picker p
+                          LEFT JOIN warehouse w ON w.id = p.warehouse
+                         WHERE p.id = :id
+                        """)
+                .param("id", id)
+                .query(PickerStateRow.class)
+                .optional();
+    }
+
+    /** Zone groups a picker belongs to, with name. */
+    public List<ZoneGroupRow> findZoneGroupsByPicker(long pickerId) {
+        return stockholm.sql("""
+                        SELECT zg.id, zg.zone_group_name AS zone_group_name
+                          FROM picker_zone_group pzg
+                          JOIN zone_group zg ON zg.id = pzg.zone_group_id
+                         WHERE pzg.picker_id = :pickerId
+                           AND zg.active AND NOT zg.deleted
+                         ORDER BY zg.id
+                        """)
+                .param("pickerId", pickerId)
+                .query(ZoneGroupRow.class)
+                .list();
+    }
+
+    /** Zones inside a zone_group. Caller caps + flags truncation. */
+    public List<ZoneRow> findZonesInZoneGroup(long zoneGroupId, int limit) {
+        return stockholm.sql("""
+                        SELECT z.id, z.zone_code, z.zone_name
+                          FROM zone_zone_group zzg
+                          JOIN zone z ON z.id = zzg.zone_id
+                         WHERE zzg.zone_group_id = :zgId
+                           AND z.active AND NOT z.deleted
+                         ORDER BY z.id
+                         LIMIT :lim
+                        """)
+                .param("zgId", zoneGroupId)
+                .param("lim", limit)
+                .query(ZoneRow.class)
+                .list();
+    }
+
+    public int countZonesInZoneGroup(long zoneGroupId) {
+        Long n = stockholm.sql("""
+                        SELECT count(*)
+                          FROM zone_zone_group zzg
+                          JOIN zone z ON z.id = zzg.zone_id
+                         WHERE zzg.zone_group_id = :zgId
+                           AND z.active AND NOT z.deleted
+                        """)
+                .param("zgId", zoneGroupId)
+                .query(Long.class)
+                .single();
+        return n == null ? 0 : n.intValue();
+    }
+
+    /**
+     * Open + unassigned pick_lists across the given zones, ordered by the operational
+     * picker-queue ordering (ppl.precedence asc nulls last → priority desc → sub_level
+     * desc → created_date asc). Joins one PP code as a sample for the agent's chain hop.
+     * Caller passes {@code limit + 1} to detect truncation.
+     */
+    public List<OpenPickListRow> findOpenPickListsInZones(Collection<Long> zoneIds, int limit) {
+        if (zoneIds == null || zoneIds.isEmpty()) {
+            return List.of();
+        }
+        return stockholm.sql("""
+                        SELECT pl.id              AS pick_list_id,
+                               pl.status          AS pick_list_status,
+                               pl.allotted_zone   AS allotted_zone_id,
+                               z.zone_code        AS allotted_zone_code,
+                               pl.priority,
+                               pl.picking_priority_level AS picking_priority_level_id,
+                               ppl.precedence     AS picking_priority_precedence,
+                               pl.sub_level_priority,
+                               pl.created_date,
+                               (SELECT pp.code FROM pick_list_details pld
+                                  JOIN pick_package pp ON pp.id = pld.pick_package_id
+                                 WHERE pld.pick_list_id = pl.id
+                                 ORDER BY pld.id LIMIT 1)  AS pick_package_code_sample
+                          FROM pick_list pl
+                          LEFT JOIN zone z ON z.id = pl.allotted_zone
+                          LEFT JOIN picking_priority_level ppl ON ppl.id = pl.picking_priority_level
+                         WHERE pl.allotted_zone IN (:zoneIds)
+                           AND pl.status = 'OPEN'
+                           AND pl.picker_id IS NULL
+                         ORDER BY COALESCE(ppl.precedence, 2147483647),
+                                  pl.priority DESC,
+                                  pl.sub_level_priority DESC,
+                                  pl.created_date,
+                                  pl.id
+                         LIMIT :lim
+                        """)
+                .param("zoneIds", zoneIds)
+                .param("lim", limit)
+                .query(OpenPickListRow.class)
+                .list();
+    }
+
+    /** Per-zone pick_list activity counts: open+unassigned, open total, all statuses. */
+    public List<ZoneActivityRow> countPickListActivityPerZone(Collection<Long> zoneIds) {
+        if (zoneIds == null || zoneIds.isEmpty()) {
+            return List.of();
+        }
+        return stockholm.sql("""
+                        SELECT z.id                                            AS zone_id,
+                               z.zone_code                                     AS zone_code,
+                               count(*) FILTER (WHERE pl.status = 'OPEN' AND pl.picker_id IS NULL) AS open_unassigned,
+                               count(*) FILTER (WHERE pl.status = 'OPEN')      AS open_total,
+                               count(*)                                        AS total_any_status
+                          FROM zone z
+                          LEFT JOIN pick_list pl ON pl.allotted_zone = z.id
+                         WHERE z.id IN (:zoneIds)
+                         GROUP BY z.id, z.zone_code
+                         ORDER BY z.id
+                        """)
+                .param("zoneIds", zoneIds)
+                .query(ZoneActivityRow.class)
+                .list();
+    }
+
+    /**
+     * Sibling pickers — pickers other than {@code excludePickerId} who share at least one
+     * zone_group with the given list. Returns the same shape as {@link #findEligiblePickersForZones}
+     * so the caller can reuse the status-breakdown helper.
+     */
+    public List<PickerRow> findSiblingPickers(Collection<Long> zoneGroupIds, long excludePickerId) {
+        if (zoneGroupIds == null || zoneGroupIds.isEmpty()) {
+            return List.of();
+        }
+        return stockholm.sql("""
+                        SELECT DISTINCT p.id, p.code, p.name, p.status, p.last_login_time
+                          FROM picker p
+                          JOIN picker_zone_group pzg ON pzg.picker_id = p.id
+                         WHERE pzg.zone_group_id IN (:zoneGroupIds)
+                           AND p.id <> :excludeId
+                           AND p.active AND NOT p.deleted
+                         ORDER BY p.id
+                         LIMIT :cap
+                        """)
+                .param("zoneGroupIds", zoneGroupIds)
+                .param("excludeId", excludePickerId)
+                .param("cap", MAX_PICKERS_PER_QUERY)
+                .query(PickerRow.class)
+                .list();
+    }
+
+    public int maxOpenPickListsSample() {
+        return 20;
+    }
+
+    public int maxZonesPerZoneGroup() {
+        return MAX_ZONES_PER_AREA;
+    }
+
     // ─── row records ─────────────────────────────────────────────────────────
 
     public record PickerRow(
@@ -176,9 +351,46 @@ public class PickerAccessRepository {
             Instant lastLoginTime) {
     }
 
+    public record PickerStateRow(
+            long id,
+            String code,
+            String name,
+            Long warehouseId,
+            String warehouseCode,
+            String status,
+            Instant lastLoginTime,
+            boolean active,
+            boolean deleted,
+            String type) {
+    }
+
     public record ZoneRow(
             long id,
             String zoneCode,
             String zoneName) {
+    }
+
+    public record ZoneGroupRow(long id, String zoneGroupName) {
+    }
+
+    public record OpenPickListRow(
+            long pickListId,
+            String pickListStatus,
+            Long allottedZoneId,
+            String allottedZoneCode,
+            Long priority,
+            Long pickingPriorityLevelId,
+            Integer pickingPriorityPrecedence,
+            Long subLevelPriority,
+            Instant createdDate,
+            String pickPackageCodeSample) {
+    }
+
+    public record ZoneActivityRow(
+            long zoneId,
+            String zoneCode,
+            long openUnassigned,
+            long openTotal,
+            long totalAnyStatus) {
     }
 }

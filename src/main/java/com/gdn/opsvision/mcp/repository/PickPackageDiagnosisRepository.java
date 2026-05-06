@@ -49,7 +49,7 @@ public class PickPackageDiagnosisRepository {
         return n != null && n > 0;
     }
 
-    /** PP header + assigned-picker join + siteCode (one row, or empty if PP gone). */
+    /** PP header + assigned-picker join + siteCode + batch/wave (one row, or empty if PP gone). */
     public Optional<PpStateRow> findStateById(long ppId) {
         return stockholm.sql("""
                         SELECT pp.id                  AS pp_id,
@@ -66,6 +66,9 @@ public class PickPackageDiagnosisRepository {
                                picker.code            AS assigned_picker_code,
                                pp.assigned_picker_date,
                                pp.distribution_zone_code,
+                               pp.batch_id,
+                               pp.batch_type,
+                               pp.wave_number,
                                pp.created_date,
                                pp.updated_date,
                                pp.auto_cancel_date,
@@ -81,6 +84,35 @@ public class PickPackageDiagnosisRepository {
                 .param("ppId", ppId)
                 .query(PpStateRow.class)
                 .optional();
+    }
+
+    /**
+     * Sibling PPs sharing the same {@code batch_id} or {@code wave_number}. Excludes the
+     * current PP. Returns {@code (picking_status, status)} pairs so the caller can build
+     * frequency breakdowns. Bound at 1000 rows; if a batch is bigger than that, we surface
+     * what we got — the breakdown is still informative.
+     */
+    public List<BatchSiblingRow> findBatchSiblings(String batchId, String waveNumber, long ownPpId) {
+        boolean hasBatch = batchId != null && !batchId.isBlank();
+        boolean hasWave = waveNumber != null && !waveNumber.isBlank();
+        if (!hasBatch && !hasWave) {
+            return List.of();
+        }
+        return stockholm.sql("""
+                        SELECT pp.picking_status, pp.status
+                          FROM pick_package pp
+                         WHERE pp.id <> :ownId
+                           AND (
+                                 (CAST(:batchId AS text) IS NOT NULL AND pp.batch_id = :batchId)
+                              OR (CAST(:waveNo  AS text) IS NOT NULL AND pp.wave_number = :waveNo)
+                           )
+                         LIMIT 1000
+                        """)
+                .param("ownId", ownPpId)
+                .param("batchId", hasBatch ? batchId : null)
+                .param("waveNo", hasWave ? waveNumber : null)
+                .query(BatchSiblingRow.class)
+                .list();
     }
 
     /** Priority columns + picking_priority_level details. */
@@ -205,10 +237,16 @@ public class PickPackageDiagnosisRepository {
             String assignedPickerCode,
             Instant assignedPickerDate,
             String distributionZoneCode,
+            String batchId,
+            String batchType,
+            String waveNumber,
             Instant createdDate,
             Instant updatedDate,
             Instant autoCancelDate,
             String siteCode) {
+    }
+
+    public record BatchSiblingRow(String pickingStatus, int status) {
     }
 
     public record PpPriorityRow(

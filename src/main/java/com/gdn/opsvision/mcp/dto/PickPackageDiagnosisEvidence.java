@@ -24,14 +24,24 @@ public record PickPackageDiagnosisEvidence(
         List<PickListAllocation> pickListAllocations,
         List<SourceAreaCoverage> sourceAreas,
         ReplenishmentSignal replenishment,
+        BatchConsolidation batchConsolidation,
         WorkflowSignals signals,
         InterpretiveHints hints) {
 
-    /** Section 1 — current PP state + assignment. */
+    /**
+     * Section 1 — current PP state + assignment + batch/wave context.
+     *
+     * <p>{@code statusLabel} maps the {@code status} integer to its {@code PickPackageStatus}
+     * enum name (Hibernate persists ordinal): 0=OPEN, 1=WEIGHT_CAPTURE_PENDING,
+     * 2=WEIGHT_CAPTURE_DONE, 3=GIN_COMPLETE, 4=AWB_PENDING, 5=AWB_RECEIVED,
+     * 6=SHIPMENT_BOOKING_FAILED, 7=ADDED_TO_SHIPMENT_REQUEST, 8=PARTIAL_GIN_COMPLETE,
+     * 9=WAITING_FOR_SHIPMENT_REQUEST, 10=CANCELLATION_PENDING.
+     */
     public record PickPackageState(
             long ppId,
             String ppCode,
             int status,
+            String statusLabel,
             String pickingStatus,
             boolean canceled,
             Boolean inProgress,
@@ -43,6 +53,9 @@ public record PickPackageDiagnosisEvidence(
             String assignedPickerCode,
             Instant assignedPickerDate,
             String distributionZoneCode,
+            String batchId,
+            String batchType,
+            String waveNumber,
             Instant createdDate,
             Instant updatedDate,
             Instant autoCancelDate,
@@ -105,8 +118,29 @@ public record PickPackageDiagnosisEvidence(
             int deficit) {
     }
 
-    /** Section 6 — pre-computed boolean signals derived from sections 1–5. */
+    /**
+     * Section — batch / wave consolidation context. Surfaces sibling PPs in the same batch
+     * (or wave) along with breakdowns of their {@code picking_status} and {@code status}
+     * (PickPackageStatus enum). Lets the agent reason about "PP waiting for batch siblings
+     * to catch up" or "this PP is the last one ahead of an otherwise complete batch".
+     *
+     * <p>{@code inBatch} is true when {@code pp.batch_id} or {@code pp.wave_number} is
+     * non-blank. {@code siblingCount} excludes the current PP. Breakdowns are
+     * insertion-order maps keyed by enum value.
+     */
+    public record BatchConsolidation(
+            boolean inBatch,
+            String batchId,
+            String batchType,
+            String waveNumber,
+            int siblingCount,
+            java.util.Map<String, Integer> siblingPickingStatusBreakdown,
+            java.util.Map<String, Integer> siblingPpStatusBreakdown) {
+    }
+
+    /** Section 6 — pre-computed boolean signals derived from sections 1–5 plus batch. */
     public record WorkflowSignals(
+            // picking_status booleans (pre/in/post-pick)
             boolean isCanceled,
             boolean isDeprioritized,
             boolean isRejected,
@@ -120,11 +154,24 @@ public record PickPackageDiagnosisEvidence(
             boolean isReadyForManualPicking,
             boolean isReachedToQc,
             boolean isPickingComplete,
+            // pp.status (PickPackageStatus enum) booleans — post-pick / shipment pipeline
+            boolean isWeightCapturePending,
+            boolean isWeightCaptureDone,
+            boolean isGinComplete,
+            boolean isPartialGinComplete,
+            boolean isAwbPending,
+            boolean isAwbReceived,
+            boolean isShipmentBookingFailed,
+            boolean isAddedToShipmentRequest,
+            boolean isWaitingForShipmentRequest,
+            boolean isCancellationPending,
+            // derived signals
             boolean hasAnyOpenPickList,
             boolean hasNoEligiblePickerForAnyOpenPickList,
             boolean hasEligiblePickersButNoneAvailable,
             boolean hasReplenishmentDeficit,
-            boolean hasMultipleSourceAreas) {
+            boolean hasMultipleSourceAreas,
+            boolean isInBatchOrWave) {
     }
 
     /** Section 7 — plain-English meaning for the current picking_status + applicable hints. */
