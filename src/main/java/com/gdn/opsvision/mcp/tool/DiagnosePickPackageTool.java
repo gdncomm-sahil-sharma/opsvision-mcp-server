@@ -1,7 +1,6 @@
 package com.gdn.opsvision.mcp.tool;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -12,16 +11,17 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
 
 import com.gdn.opsvision.mcp.dto.InventoryForItemEvidence.WarehouseItemMaster;
+import com.gdn.opsvision.mcp.dto.LifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.DemandShortage;
-import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.InterpretiveHints;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickListAllocation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickPackagePriority;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickPackageState;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusBreakdown;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.ReplenishmentSignal;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.SourceAreaCoverage;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.StatusInterpretation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.WorkflowSignals;
 import com.gdn.opsvision.mcp.repository.InventoryRepository;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository;
@@ -47,7 +47,7 @@ public class DiagnosePickPackageTool {
      * {@code PickPackageStatus} enum mapped by ordinal. Hibernate persists pp.status as
      * EnumType.ORDINAL (the entity has no @Enumerated; default is ORDINAL). Verified
      * against QA2: status=4 → AWB_PENDING, 6 → SHIPMENT_BOOKING_FAILED, 9 →
-     * WAITING_FOR_SHIPMENT_REQUEST, etc.
+     * WAITING_FOR_SHIPMENT_REQUEST, etc. Ordinal index = ordinal in the enum file.
      */
     private static final String[] PP_STATUS_LABELS = {
             "OPEN",                          // 0
@@ -63,35 +63,68 @@ public class DiagnosePickPackageTool {
             "CANCELLATION_PENDING"           // 10
     };
 
-    /** Plain-English meaning for each {@code PickPackageStatus} ordinal. */
-    private static final Map<String, String> PP_STATUS_MEANING = Map.ofEntries(
-            Map.entry("OPEN", "Default state — PP is open. picking_status carries the active sub-state."),
-            Map.entry("WEIGHT_CAPTURE_PENDING", "PP picked + at packing station; awaiting weight capture before GIN."),
-            Map.entry("WEIGHT_CAPTURE_DONE", "Weight captured; ready for GIN."),
-            Map.entry("GIN_COMPLETE", "Goods Issue Note submitted; downstream of picking."),
-            Map.entry("AWB_PENDING", "Awaiting AWB (airway bill) from logistics provider. Picking is done. Not a picking issue."),
-            Map.entry("AWB_RECEIVED", "AWB received from logistics; ready for shipment-request creation."),
-            Map.entry("SHIPMENT_BOOKING_FAILED", "Shipment booking with logistics provider failed (operational/third-party). Check logistic_option_code + AWB info; likely needs a retry, not a picking fix."),
-            Map.entry("ADDED_TO_SHIPMENT_REQUEST", "PP attached to a shipment request; awaiting carrier handoff."),
-            Map.entry("PARTIAL_GIN_COMPLETE", "Partial GIN issued (split shipment); remaining items still in flight."),
-            Map.entry("WAITING_FOR_SHIPMENT_REQUEST", "Downstream of picking. Outbound shipment-request creation hasn't run yet — waiting on logistics-side workflow."),
-            Map.entry("CANCELLATION_PENDING", "PP-level cancellation initiated; awaiting confirmation before stock/state release."));
+    private static final String PICKING_STATUS_SOURCE_REF =
+            "stockholm/InventoryModel/src/main/java/com/gdn/inventory/entity/PriorityCalStatus.java";
+    private static final String PP_STATUS_SOURCE_REF =
+            "stockholm/InventoryUtilities/src/main/java/com/gdn/inventory/type/PickPackageStatus.java";
 
-    /** Plain-English meaning for each {@code PriorityCalStatus} value the PP can carry. */
-    private static final Map<String, String> PICKING_STATUS_MEANING = Map.ofEntries(
-            Map.entry("PRIORITY_CAL_PENDING", "Priority calculation pending — pre-pick. PP is queued for priority assignment, not yet a picker candidate."),
-            Map.entry("PRIORITY_CAL_DONE", "Priority calculation finished — pre-pick. Set during priority calc, well BEFORE picking starts. Not a 'picking done' signal."),
-            Map.entry("READY_FOR_MANUAL_PICKING", "Pre-pick. Pick list eligible for manual-picking workflow; awaiting picker claim."),
-            Map.entry("STORAGE_STOCK_RESERVED", "Pre-pick. Aggregate stock reserved; awaiting downstream pick-list / picker assignment."),
-            Map.entry("STORAGE_NOT_AVAILABLE", "Pre-pick — system can't find storage for this PP. Stock isn't at the forward pick face yet; replenishment from reserve area pending. NOT a bug if stock is just not yet replenished."),
-            Map.entry("WAITING_FOR_PUTAWAY", "Pre-pick. Putaway hasn't completed — stock physically not in pickable bins yet."),
-            Map.entry("CATEGORY_EXPIRY_RULE_NOT_SET", "Pre-pick — configuration gap. The category-expiry rule isn't configured; PP can't proceed until ops adds the rule."),
-            Map.entry("PICK_LIST_GENERATED", "Pre-pick. Pick list created but PP hasn't transitioned to PARTIAL_PACKAGE yet."),
-            Map.entry("PARTIAL_PACKAGE", "Pick list has been generated for at least part of this PP — picking pending or in flight (set during pick-list creation, NOT post-pick). Common state for in-flight PPs."),
-            Map.entry("PROBLEM_SOLVE", "PP routed to problem-solve queue — manual intervention required. Picker queue won't surface this until ops resolves it."),
-            Map.entry("PICKING_COMPLETE", "Picking finished. Downstream stages (QC, packing) take over."),
-            Map.entry("REACHED_TO_QC", "Past picking. Handling units transitioned out of pick zones into QC. Issue (if any) is downstream of picking."),
-            Map.entry("QC_COMPLETE", "Past picking and QC. Ready for packing/handover stages."));
+    /** Internal: lifecycle stage + one-line meaning per status value. */
+    private record StatusInfo(LifecycleStage stage, String meaning) {
+    }
+
+    /** {@code PriorityCalStatus} → stage + short meaning. 13 values. */
+    private static final Map<String, StatusInfo> PICKING_STATUS_INFO = Map.ofEntries(
+            Map.entry("PRIORITY_CAL_PENDING", new StatusInfo(LifecycleStage.PRE_PICK_LIST,
+                    "Priority calculation pending; pick list not generated yet.")),
+            Map.entry("PRIORITY_CAL_DONE", new StatusInfo(LifecycleStage.PRE_PICK_LIST,
+                    "Priority calc finished; PRE-pick (set during priority calc, NOT a 'picking done' signal).")),
+            Map.entry("READY_FOR_MANUAL_PICKING", new StatusInfo(LifecycleStage.PICK_LIST_GENERATED,
+                    "Pick list eligible for manual-picking workflow; awaiting picker claim.")),
+            Map.entry("STORAGE_STOCK_RESERVED", new StatusInfo(LifecycleStage.PRE_PICK_LIST,
+                    "Aggregate stock reserved; awaiting downstream pick-list / picker assignment.")),
+            Map.entry("STORAGE_NOT_AVAILABLE", new StatusInfo(LifecycleStage.PRE_PICK_LIST_BLOCKED,
+                    "System can't find storage with stock for this PP; replenishment from reserve area pending.")),
+            Map.entry("WAITING_FOR_PUTAWAY", new StatusInfo(LifecycleStage.PRE_PICK_LIST_BLOCKED,
+                    "Putaway hasn't completed; stock not in pickable bins yet.")),
+            Map.entry("CATEGORY_EXPIRY_RULE_NOT_SET", new StatusInfo(LifecycleStage.PRE_PICK_LIST_BLOCKED,
+                    "Category-expiry rule not configured; PP can't proceed until ops adds the rule.")),
+            Map.entry("PICK_LIST_GENERATED", new StatusInfo(LifecycleStage.PICK_LIST_GENERATED,
+                    "Pick list created.")),
+            Map.entry("PARTIAL_PACKAGE", new StatusInfo(LifecycleStage.IN_FLIGHT,
+                    "Pick list generated for at least part of this PP; picking pending or in flight (set during pick-list creation, NOT post-pick).")),
+            Map.entry("PROBLEM_SOLVE", new StatusInfo(LifecycleStage.MANUAL_INTERVENTION,
+                    "Routed to problem-solve queue; manual intervention required.")),
+            Map.entry("PICKING_COMPLETE", new StatusInfo(LifecycleStage.POST_PICK,
+                    "Picking finished; downstream stages take over.")),
+            Map.entry("REACHED_TO_QC", new StatusInfo(LifecycleStage.POST_PICK,
+                    "Past picking; HUs transitioned out of pick zones into QC.")),
+            Map.entry("QC_COMPLETE", new StatusInfo(LifecycleStage.POST_PICK,
+                    "Past picking and QC; ready for packing/handover.")));
+
+    /** {@code PickPackageStatus} → stage + short meaning. 11 ordinals. */
+    private static final Map<String, StatusInfo> PP_STATUS_INFO = Map.ofEntries(
+            Map.entry("OPEN", new StatusInfo(LifecycleStage.DEFAULT,
+                    "Default state; picking_status carries the active sub-state.")),
+            Map.entry("WEIGHT_CAPTURE_PENDING", new StatusInfo(LifecycleStage.POST_PICK_PACKING,
+                    "PP picked + at packing station; awaiting weight capture before GIN.")),
+            Map.entry("WEIGHT_CAPTURE_DONE", new StatusInfo(LifecycleStage.POST_PICK_PACKING,
+                    "Weight captured; ready for GIN.")),
+            Map.entry("GIN_COMPLETE", new StatusInfo(LifecycleStage.POST_PICK_SHIPMENT_PIPELINE,
+                    "Goods Issue Note submitted.")),
+            Map.entry("AWB_PENDING", new StatusInfo(LifecycleStage.POST_PICK_SHIPMENT_PIPELINE,
+                    "Awaiting AWB from logistics provider; downstream of picking.")),
+            Map.entry("AWB_RECEIVED", new StatusInfo(LifecycleStage.POST_PICK_SHIPMENT_PIPELINE,
+                    "AWB received; ready for shipment-request creation.")),
+            Map.entry("SHIPMENT_BOOKING_FAILED", new StatusInfo(LifecycleStage.SHIPMENT_BLOCKED,
+                    "Logistics-side booking failed; usually resolved by retry, not a picking fix.")),
+            Map.entry("ADDED_TO_SHIPMENT_REQUEST", new StatusInfo(LifecycleStage.POST_PICK_SHIPMENT_PIPELINE,
+                    "Attached to a shipment request; awaiting carrier handoff.")),
+            Map.entry("PARTIAL_GIN_COMPLETE", new StatusInfo(LifecycleStage.POST_PICK_SHIPMENT_PIPELINE,
+                    "Partial GIN issued (split shipment); remaining items in flight.")),
+            Map.entry("WAITING_FOR_SHIPMENT_REQUEST", new StatusInfo(LifecycleStage.POST_PICK_SHIPMENT_PIPELINE,
+                    "Outbound shipment-request creation hasn't run yet.")),
+            Map.entry("CANCELLATION_PENDING", new StatusInfo(LifecycleStage.TERMINATING,
+                    "PP-level cancellation initiated; awaiting confirmation.")));
 
     private final PickPackageDiagnosisRepository diagnosisRepo;
     private final PickerAccessRepository pickerAccessRepo;
@@ -142,9 +175,24 @@ public class DiagnosePickPackageTool {
             MAR; GF-STOR to 51). The list of resolved zone codes is capped; the eligible-picker \
             count is computed against the FULL list, not the capped sample.
 
-            'hints.pickingStatusMeaning' is plain-English text the agent can quote. Especially \
-            useful for non-obvious values: PRIORITY_CAL_DONE is PRE-pick (not "picking done"); \
-            PARTIAL_PACKAGE is set during pick-list creation, NOT post-pick.
+            'pickingStatusInterpretation' and 'ppStatusInterpretation' carry: a structured \
+            'lifecycleStage' enum (PRE_PICK_LIST / PRE_PICK_LIST_BLOCKED / IN_FLIGHT / POST_PICK / \
+            POST_PICK_PACKING / POST_PICK_SHIPMENT_PIPELINE / SHIPMENT_BLOCKED / MANUAL_INTERVENTION / \
+            TERMINATING / DEFAULT / OTHER) for triage, plus a one-line 'meaning', plus a \
+            'sourceRef' to the entity / enum file. Use lifecycleStage to compare and triage; quote \
+            meaning when explaining to a user. Notable: PRIORITY_CAL_DONE is PRE_PICK_LIST (not \
+            'picking done'); PARTIAL_PACKAGE is IN_FLIGHT (set during pick-list creation, NOT \
+            post-pick).
+
+            'signals.derivationNotes' is a per-derived-signal one-liner showing the rule and \
+            inputs each derived boolean was computed under. Use it to sanity-check a signal \
+            before quoting it — e.g. if hasNoEligiblePickerForAnyOpenPickList=true but the \
+            derivation note says 'considered 0 OPEN+unassigned PLs', the signal is technically \
+            vacuous.
+
+            Vacuous-true suppression: derived booleans whose precondition is empty are forced \
+            to false (not vacuously true). e.g. hasMultipleSourceAreas is false when no source \
+            areas exist, not vacuously-false-because-distinct-areas-trivially-not-greater-than-1.
 
             Returns FACTS, not VERDICTS. Not-found returns found=false with all sections null.
             """)
@@ -231,11 +279,12 @@ public class DiagnosePickPackageTool {
         // §5b batch / wave consolidation — sibling breakdown
         BatchConsolidation batchConsolidation = computeBatchConsolidation(ppId, s);
 
-        // §6 derived booleans
+        // §6 derived booleans + per-derivation notes
         WorkflowSignals signals = computeSignals(s, pickListAllocations, replenishment, distinctSourceAreas, batchConsolidation);
 
-        // §7 hints
-        InterpretiveHints hints = buildHints(s.pickingStatus(), state.statusLabel(), signals, batchConsolidation);
+        // §7 structured status interpretations (replaces previous applicableHints prose)
+        StatusInterpretation pickingInterp = buildPickingStatusInterpretation(s.pickingStatus());
+        StatusInterpretation ppInterp = buildPpStatusInterpretation(state.statusLabel());
 
         return new PickPackageDiagnosisEvidence(
                 s.ppCode(),
@@ -247,7 +296,8 @@ public class DiagnosePickPackageTool {
                 replenishment,
                 batchConsolidation,
                 signals,
-                hints);
+                pickingInterp,
+                ppInterp);
     }
 
     // ─── lookup + mapping helpers ────────────────────────────────────────────
@@ -311,7 +361,7 @@ public class DiagnosePickPackageTool {
 
     private static PickPackageDiagnosisEvidence notFound(String code) {
         return new PickPackageDiagnosisEvidence(
-                code, /*found=*/false, null, null, List.of(), List.of(), null, null, null, null);
+                code, /*found=*/false, null, null, List.of(), List.of(), null, null, null, null, null);
     }
 
     // ─── eligible-picker computation ────────────────────────────────────────
@@ -408,7 +458,23 @@ public class DiagnosePickPackageTool {
 
     // ─── boolean signal derivation ──────────────────────────────────────────
 
-    private static WorkflowSignals computeSignals(
+    /**
+     * Computes the WorkflowSignals block. Package-private so unit tests can drive it
+     * with hand-built fixtures (no DB).
+     *
+     * <p>Vacuous-true suppression:
+     * <ul>
+     *   <li>{@code hasMultipleSourceAreas} requires distinctSourceAreas to be non-empty
+     *       AND have size &gt; 1 (otherwise vacuous).</li>
+     *   <li>{@code hasNoEligiblePickerForAnyOpenPickList} requires {@code hasOpenPl=true}
+     *       (already enforced in the loop).</li>
+     *   <li>{@code hasEligiblePickersButNoneAvailable} similarly requires an OPEN PL with
+     *       eligible pickers existing.</li>
+     *   <li>{@code hasReplenishmentDeficit} only fires if at least one shortage row has
+     *       deficit &gt; 0 (false on empty shortage list).</li>
+     * </ul>
+     */
+    static WorkflowSignals computeSignals(
             PpStateRow s,
             List<PickListAllocation> allocations,
             ReplenishmentSignal replenishment,
@@ -422,13 +488,17 @@ public class DiagnosePickPackageTool {
         boolean isPriorityBoosted = Boolean.TRUE.equals(s.priorityBoosted());
         boolean isAssigned = s.assignedPickerId() != null;
 
+        int openUnassignedCount = 0;
+        int openWithEligibleCount = 0;
         boolean hasOpenPl = false;
         boolean allOpenLackEligible = true;
         boolean anyOpenHasEligibleNoneAvailable = false;
         for (PickListAllocation a : allocations) {
             if ("OPEN".equalsIgnoreCase(a.pickListStatus()) && a.pickerId() == null) {
+                openUnassignedCount++;
                 hasOpenPl = true;
                 if (a.eligiblePickerCount() > 0) {
+                    openWithEligibleCount++;
                     allOpenLackEligible = false;
                     if (a.eligiblePickerStatus() != null
                             && a.eligiblePickerStatus().available() == 0) {
@@ -438,8 +508,38 @@ public class DiagnosePickPackageTool {
             }
         }
         boolean hasNoEligibleForAnyOpen = hasOpenPl && allOpenLackEligible;
-        boolean hasReplenishmentDeficit = replenishment != null
-                && replenishment.shortages().stream().anyMatch(ds -> ds.deficit() > 0);
+
+        int shortageCount = replenishment == null ? 0 : replenishment.shortages().size();
+        long deficitRows = replenishment == null ? 0
+                : replenishment.shortages().stream().filter(ds -> ds.deficit() > 0).count();
+        boolean hasReplenishmentDeficit = deficitRows > 0;
+
+        boolean hasMultipleSourceAreas =
+                !distinctSourceAreas.isEmpty() && distinctSourceAreas.size() > 1;
+        boolean inBatch = batchConsolidation != null && batchConsolidation.inBatch();
+
+        Map<String, String> notes = new LinkedHashMap<>();
+        notes.put("hasAnyOpenPickList",
+                "TRUE iff any pickListAllocations row has status=OPEN AND pickerId=null. Considered "
+                        + allocations.size() + " allocation row(s); "
+                        + openUnassignedCount + " were OPEN+unassigned.");
+        notes.put("hasNoEligiblePickerForAnyOpenPickList",
+                "TRUE iff hasAnyOpenPickList AND every OPEN+unassigned PL has eligiblePickerCount==0. "
+                        + "Considered " + openUnassignedCount + " OPEN+unassigned PL(s); "
+                        + openWithEligibleCount + " had any eligible picker.");
+        notes.put("hasEligiblePickersButNoneAvailable",
+                "TRUE iff any OPEN+unassigned PL has eligiblePickerCount>0 AND eligiblePickerStatus.available==0. "
+                        + "Considered " + openUnassignedCount + " OPEN+unassigned PL(s).");
+        notes.put("hasReplenishmentDeficit",
+                "TRUE iff any DemandShortage has deficit>0. Considered "
+                        + shortageCount + " shortage row(s); "
+                        + deficitRows + " had deficit>0.");
+        notes.put("hasMultipleSourceAreas",
+                "TRUE iff distinctSourceAreas has size>1 (suppressed-vacuous on empty). distinctSourceAreas size="
+                        + distinctSourceAreas.size() + ".");
+        notes.put("isInBatchOrWave",
+                "TRUE iff batchConsolidation.inBatch (i.e. pp.batch_id or pp.wave_number is non-blank). batchConsolidation.inBatch="
+                        + inBatch + ".");
 
         return new WorkflowSignals(
                 // picking_status booleans
@@ -472,89 +572,38 @@ public class DiagnosePickPackageTool {
                 hasNoEligibleForAnyOpen,
                 anyOpenHasEligibleNoneAvailable,
                 hasReplenishmentDeficit,
-                distinctSourceAreas.size() > 1,
-                batchConsolidation != null && batchConsolidation.inBatch());
+                hasMultipleSourceAreas,
+                inBatch,
+                notes);
     }
 
-    // ─── hints ──────────────────────────────────────────────────────────────
+    // ─── status interpretations (replaces applicableHints) ───────────────────
 
-    private static InterpretiveHints buildHints(
-            String pickingStatus,
-            String ppStatusLabel,
-            WorkflowSignals signals,
-            BatchConsolidation batchConsolidation) {
-        String pickingMeaning = pickingStatus == null
-                ? null
-                : PICKING_STATUS_MEANING.getOrDefault(pickingStatus,
-                        "Unknown picking_status enum value; check PriorityCalStatus.java for additions.");
-        String ppStatusMeaning = ppStatusLabel == null ? null
-                : PP_STATUS_MEANING.getOrDefault(ppStatusLabel, null);
-        // Compose pickingStatusMeaning to surface BOTH pp.status and picking_status when
-        // the pp.status is post-pick / shipment-pipeline (more informative than picking_status alone).
-        String composed = composeMeaning(pickingMeaning, ppStatusLabel, ppStatusMeaning);
-
-        List<String> applicable = new ArrayList<>();
-        if (signals.isReachedToQc() || signals.isPickingComplete()) {
-            applicable.add("This PP is past the picking gate. If it appears stuck, the issue is downstream of picking — check handling-unit packing handoff (selected_for_packing / packing_order presence).");
+    static StatusInterpretation buildPickingStatusInterpretation(String pickingStatus) {
+        if (pickingStatus == null) {
+            return null;
         }
-        if (signals.isStorageNotAvailable()) {
-            applicable.add("STORAGE_NOT_AVAILABLE means the system can't find storage with stock for this PP. Cross-check replenishment.shortages: if aggregateUnrestrictedAvailable > 0 but deficit > 0, it's the 'SNA-but-stock-exists-elsewhere' pattern from SCPS-54110.");
+        StatusInfo info = PICKING_STATUS_INFO.get(pickingStatus);
+        if (info == null) {
+            return new StatusInterpretation(pickingStatus, LifecycleStage.OTHER,
+                    "Unknown picking_status value — check source for additions.",
+                    PICKING_STATUS_SOURCE_REF);
         }
-        if (signals.isInProblemSolve()) {
-            applicable.add("PP is in problem-solve queue — manual ops intervention required before it returns to the picker queue.");
-        }
-        if (signals.hasNoEligiblePickerForAnyOpenPickList()) {
-            applicable.add("No picker has access to the OPEN pick_list(s)' allotted zone(s). Either no picker_zone_group is configured for these zones, or all eligible pickers are deleted/inactive.");
-        } else if (signals.hasEligiblePickersButNoneAvailable()) {
-            applicable.add("Pickers exist for the allotted zone(s) but none are AVAILABLE — they're BUSY / OFFLINE / on break. PP will be picked when one frees up.");
-        }
-        if (signals.isCanceled()) {
-            applicable.add("PP is canceled — won't be picked. Check why ops cancelled it.");
-        }
-        if (signals.isDeprioritized()) {
-            applicable.add("PP has deprioritized=true — pulled out of the picker queue regardless of priority numbers.");
-        }
-        if (signals.isRejected()) {
-            applicable.add("PP has rejected=true — explicitly removed from the picker queue.");
-        }
-        if (signals.isAlreadyAssigned()) {
-            applicable.add("PP already has a picker assigned (state.assignedPickerId). It IS being worked; the question may be 'why is it slow' rather than 'why no picker'.");
-        }
-        // pp.status (shipment pipeline) hints — these mean picking is done; defer.
-        if (signals.isAwbPending()) {
-            applicable.add("AWB_PENDING — PP picked + GIN-ready, awaiting AWB from logistics provider. Picking-side answer is 'done'; this is a third-party / outbound pipeline state.");
-        }
-        if (signals.isShipmentBookingFailed()) {
-            applicable.add("SHIPMENT_BOOKING_FAILED — operational/third-party. Check logistic_option_code + AWB info; usually resolved by retry, not a picking fix.");
-        }
-        if (signals.isWaitingForShipmentRequest()) {
-            applicable.add("WAITING_FOR_SHIPMENT_REQUEST — outbound shipment-request creation hasn't run. Downstream of picking; not a picker-queue issue.");
-        }
-        if (signals.isAddedToShipmentRequest()) {
-            applicable.add("ADDED_TO_SHIPMENT_REQUEST — PP attached to a shipment request, awaiting carrier handoff. Picking is done.");
-        }
-        if (signals.isWeightCapturePending()) {
-            applicable.add("WEIGHT_CAPTURE_PENDING — PP at packing station, awaiting weight capture. Picking is done; weighing operator hasn't processed it yet.");
-        }
-        if (signals.isCancellationPending()) {
-            applicable.add("CANCELLATION_PENDING — PP-level cancellation initiated, awaiting confirmation. Don't expect picker activity.");
-        }
-        // batch / wave hints
-        if (batchConsolidation != null && batchConsolidation.inBatch() && batchConsolidation.siblingCount() > 0) {
-            String batchOrWave = batchConsolidation.batchId() != null && !batchConsolidation.batchId().isBlank()
-                    ? "batch"
-                    : "wave";
-            applicable.add("PP is in a multi-PP " + batchOrWave + " (" + batchConsolidation.siblingCount() +
-                    " siblings). Inspect batchConsolidation.siblingPickingStatusBreakdown — if most siblings are at REACHED_TO_QC and this PP isn't, it's behind the wave; if this PP is REACHED_TO_QC and siblings aren't, the batch is waiting on stragglers.");
-        }
-        return new InterpretiveHints(composed, applicable);
+        return new StatusInterpretation(pickingStatus, info.stage(), info.meaning(),
+                PICKING_STATUS_SOURCE_REF);
     }
 
-    private static String composeMeaning(String pickingMeaning, String ppStatusLabel, String ppStatusMeaning) {
-        if (ppStatusLabel != null && !"OPEN".equals(ppStatusLabel) && ppStatusMeaning != null) {
-            return "[pp.status=" + ppStatusLabel + "] " + ppStatusMeaning
-                    + (pickingMeaning != null ? " | [picking_status] " + pickingMeaning : "");
+    static StatusInterpretation buildPpStatusInterpretation(String ppStatusLabel) {
+        if (ppStatusLabel == null) {
+            return null;
         }
-        return pickingMeaning;
+        StatusInfo info = PP_STATUS_INFO.get(ppStatusLabel);
+        if (info == null) {
+            return new StatusInterpretation(ppStatusLabel, LifecycleStage.OTHER,
+                    "Unknown pp.status value — check source for additions.",
+                    PP_STATUS_SOURCE_REF);
+        }
+        return new StatusInterpretation(ppStatusLabel, info.stage(), info.meaning(),
+                PP_STATUS_SOURCE_REF);
     }
 }

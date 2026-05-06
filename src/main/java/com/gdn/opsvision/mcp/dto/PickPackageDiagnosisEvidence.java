@@ -2,6 +2,7 @@ package com.gdn.opsvision.mcp.dto;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Evidence pack for {@code diagnosePickPackage} — single PP in, structured signals out
@@ -10,8 +11,20 @@ import java.util.List;
  * <p>Returns FACTS, not VERDICTS. The {@link WorkflowSignals} block is a flat set of
  * pre-computed booleans the agent can scan quickly; the agent composes the explanation
  * from those signals + the structured sections, not from any English label this tool
- * emits. The {@link InterpretiveHints} block surfaces plain-English meanings for the raw
- * picking_status enum so the agent can quote them when explaining to the user.
+ * emits.
+ *
+ * <p>Vacuous-true suppression: derived booleans whose preconditions evaluate over
+ * empty inputs (e.g. {@code hasMultipleSourceAreas} when no source areas exist) are
+ * forced to {@code false} so the agent doesn't read a misleading "true" on a
+ * universal-quantifier-over-empty-set. {@link WorkflowSignals#derivationNotes()} carries
+ * a one-liner per derived signal explaining the inputs it considered, so a buggy
+ * derivation is detectable from the evidence pack.
+ *
+ * <p>{@link StatusInterpretation} replaces the previous multi-sentence
+ * {@code applicableHints} list with two structured fields per status:
+ * {@code lifecycleStage} (enum) and {@code meaning} (one short sentence with a
+ * source-file ref). The lifecycle stage is the primary triage field; meaning text is
+ * for quoting when explaining to a user.
  *
  * <p>Not-found ({@code found:false}, every other field null) and an empty
  * {@code pickListAllocations} / {@code sourceAreas} list are real states, not errors.
@@ -26,7 +39,8 @@ public record PickPackageDiagnosisEvidence(
         ReplenishmentSignal replenishment,
         BatchConsolidation batchConsolidation,
         WorkflowSignals signals,
-        InterpretiveHints hints) {
+        StatusInterpretation pickingStatusInterpretation,
+        StatusInterpretation ppStatusInterpretation) {
 
     /**
      * Section 1 — current PP state + assignment + batch/wave context.
@@ -138,9 +152,23 @@ public record PickPackageDiagnosisEvidence(
             java.util.Map<String, Integer> siblingPpStatusBreakdown) {
     }
 
-    /** Section 6 — pre-computed boolean signals derived from sections 1–5 plus batch. */
+    /**
+     * Section 6 — pre-computed boolean signals.
+     *
+     * <p>Two flavors: <b>enum-equality booleans</b> (cheap, deterministic; e.g.
+     * {@code isAwbPending} is just {@code pp.status==4}) and <b>derived booleans</b>
+     * computed from multiple inputs. {@link #derivationNotes()} carries a one-liner per
+     * derived signal explaining the inputs and the rule, so the agent can sanity-check.
+     *
+     * <p>Vacuous-true suppression: when a derived boolean's precondition evaluates
+     * over an empty input (no zone groups → no PLs in zones → trivially "no open PLs"),
+     * the boolean is forced to {@code false}. The dominant fact (e.g. "no zone groups")
+     * carries the meaning instead. This avoids the universal-quantifier-over-empty-set
+     * confusion where {@code isOnlyPickerForOwnZoneGroups=true} read as "they're the
+     * only one" when the picker actually has no groups at all.
+     */
     public record WorkflowSignals(
-            // picking_status booleans (pre/in/post-pick)
+            // picking_status enum-equality booleans (pre/in/post-pick)
             boolean isCanceled,
             boolean isDeprioritized,
             boolean isRejected,
@@ -154,7 +182,7 @@ public record PickPackageDiagnosisEvidence(
             boolean isReadyForManualPicking,
             boolean isReachedToQc,
             boolean isPickingComplete,
-            // pp.status (PickPackageStatus enum) booleans — post-pick / shipment pipeline
+            // pp.status enum-equality booleans — post-pick / shipment pipeline
             boolean isWeightCapturePending,
             boolean isWeightCaptureDone,
             boolean isGinComplete,
@@ -165,19 +193,29 @@ public record PickPackageDiagnosisEvidence(
             boolean isAddedToShipmentRequest,
             boolean isWaitingForShipmentRequest,
             boolean isCancellationPending,
-            // derived signals
+            // derived booleans — see derivationNotes for the rule each was computed under
             boolean hasAnyOpenPickList,
             boolean hasNoEligiblePickerForAnyOpenPickList,
             boolean hasEligiblePickersButNoneAvailable,
             boolean hasReplenishmentDeficit,
             boolean hasMultipleSourceAreas,
-            boolean isInBatchOrWave) {
+            boolean isInBatchOrWave,
+            // per-derived-signal one-liner: input fields considered + rule applied
+            Map<String, String> derivationNotes) {
     }
 
-    /** Section 7 — plain-English meaning for the current picking_status + applicable hints. */
-    public record InterpretiveHints(
-            String pickingStatusMeaning,
-            List<String> applicableHints) {
+    /**
+     * Replaces the previous multi-sentence {@code applicableHints} list. One short
+     * meaning + a structured stage + a source-file reference per status. Two
+     * StatusInterpretation fields are emitted on the evidence pack: one for
+     * {@code picking_status} (PriorityCalStatus) and one for {@code pp.status}
+     * (PickPackageStatus).
+     */
+    public record StatusInterpretation(
+            String label,
+            LifecycleStage lifecycleStage,
+            String meaning,
+            String sourceRef) {
     }
 
     public record PickerStatusBreakdown(

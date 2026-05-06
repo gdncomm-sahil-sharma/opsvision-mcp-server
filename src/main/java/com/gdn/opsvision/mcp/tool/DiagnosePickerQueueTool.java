@@ -1,7 +1,6 @@
 package com.gdn.opsvision.mcp.tool;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,11 +12,12 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
 
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusBreakdown;
+import com.gdn.opsvision.mcp.dto.PickerOperationalStage;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.AvailableWork;
-import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.InterpretiveHints;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.PickListSummary;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.PickerState;
+import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.PickerStatusInterpretation;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.PickerWorkflowSignals;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.SiblingPickerSummary;
 import com.gdn.opsvision.mcp.dto.PickerQueueDiagnosisEvidence.ZoneActivity;
@@ -39,13 +39,27 @@ import com.gdn.opsvision.mcp.repository.PickerAccessRepository.ZoneRow;
 @Service
 public class DiagnosePickerQueueTool {
 
-    private static final Map<String, String> PICKER_STATUS_MEANING = Map.ofEntries(
-            Map.entry("AVAILABLE", "Picker is logged in and ready for assignments. If queue is empty, the issue is upstream (no work in their zones, or all work already taken)."),
-            Map.entry("BUSY", "Picker is actively working a pick_list. Empty queue is irrelevant — they're already engaged."),
-            Map.entry("OFFLINE", "Picker is not logged in. They won't receive new assignments until they log in. (last_login_time may be stale.)"),
-            Map.entry("BREAK_INITIATED", "Picker is on break. Queue won't deliver work until break ends."),
-            Map.entry("BREAK_REJECT_PICKLIST", "Picker rejected a pick_list and entered break state. Queue paused for them."),
-            Map.entry("OCCUPIED", "Picker is occupied by a non-pick activity. Queue won't deliver work."));
+    private static final String PICKER_STATUS_SOURCE_REF =
+            "stockholm/InventoryUtilities/src/main/java/com/gdn/inventory/type/PickerStatus.java";
+
+    /** Internal: stage + one-line meaning per picker.status value. */
+    private record PickerStatusInfo(PickerOperationalStage stage, String meaning) {
+    }
+
+    /** {@code PickerStatus} (6 values) → operational stage + short meaning. */
+    private static final Map<String, PickerStatusInfo> PICKER_STATUS_INFO = Map.ofEntries(
+            Map.entry("AVAILABLE", new PickerStatusInfo(PickerOperationalStage.READY,
+                    "Logged in and ready for assignments.")),
+            Map.entry("BUSY", new PickerStatusInfo(PickerOperationalStage.ENGAGED,
+                    "Already working a pick_list.")),
+            Map.entry("OFFLINE", new PickerStatusInfo(PickerOperationalStage.NOT_LOGGED_IN,
+                    "Not logged in; no assignments will be issued.")),
+            Map.entry("BREAK_INITIATED", new PickerStatusInfo(PickerOperationalStage.ON_BREAK,
+                    "On break; queue paused.")),
+            Map.entry("BREAK_REJECT_PICKLIST", new PickerStatusInfo(PickerOperationalStage.ON_BREAK,
+                    "Rejected a pick_list and entered break; queue paused.")),
+            Map.entry("OCCUPIED", new PickerStatusInfo(PickerOperationalStage.ENGAGED_NON_PICKING,
+                    "Engaged on a non-pick activity.")));
 
     private final PickerAccessRepository pickerAccessRepo;
 
@@ -58,7 +72,8 @@ public class DiagnosePickerQueueTool {
             structured evidence pack out (state, zone-group memberships with the zones in \
             each, available work across those zones, per-zone activity counts, sibling \
             pickers competing for the same zone groups, pre-computed boolean signals, and \
-            a hints block).
+            a structured PickerStatusInterpretation with operational stage + one-line \
+            meaning + source-file ref).
 
             Use as the entry point when a picker reports "I'm logged in but I don't see any \
             pick packages" or when ops is investigating a specific picker's queue. Pairs \
@@ -88,6 +103,20 @@ public class DiagnosePickerQueueTool {
             production picker-queue ordering: ppl.precedence asc nulls last → priority desc \
             → sub_level_priority desc → created_date asc. Each entry includes a sample \
             pickPackageCode for chain hops into diagnosePickPackage.
+
+            'pickerStatusInterpretation' carries operationalStage (READY / ENGAGED / \
+            NOT_LOGGED_IN / ON_BREAK / ENGAGED_NON_PICKING / OTHER) for triage, plus a \
+            one-line meaning + source-file ref.
+
+            'signals.derivationNotes' shows the rule + inputs each derived boolean was \
+            computed under. Use it to sanity-check a signal before quoting it.
+
+            Vacuous-true suppression: when picker has no zone access (hasNoZoneGroupMemberships \
+            OR hasZoneGroupsButNoZones is true), secondary signals like \
+            noOpenUnassignedPickListsInPickerZones, openPickListsExistInPickerZones, and \
+            isOnlyPickerForOwnZoneGroups are forced to false. They would otherwise be \
+            vacuously true and mislead the agent into reading e.g. 'they're the only picker' \
+            when the real problem is 'no zones configured.'
 
             Returns FACTS, not VERDICTS. Not-found returns found=false with all sections \
             null.
@@ -134,11 +163,11 @@ public class DiagnosePickerQueueTool {
         // §5 sibling pickers
         SiblingPickerSummary siblings = computeSiblings(allZoneGroupIds, p.id());
 
-        // §6 derived booleans
+        // §6 derived booleans + per-derivation notes (with vacuous suppression)
         PickerWorkflowSignals signals = computeSignals(p, memberships, allZoneIds, availableWork, siblings);
 
-        // §7 hints
-        InterpretiveHints hints = buildHints(p.status(), signals);
+        // §7 structured status interpretation (replaces previous applicableHints prose)
+        PickerStatusInterpretation interp = buildPickerStatusInterpretation(p.status());
 
         return new PickerQueueDiagnosisEvidence(
                 p.code(),
@@ -149,7 +178,7 @@ public class DiagnosePickerQueueTool {
                 zoneBreakdown,
                 siblings,
                 signals,
-                hints);
+                interp);
     }
 
     private Optional<PickerStateRow> lookupPicker(String idOrCode) {
@@ -243,7 +272,17 @@ public class DiagnosePickerQueueTool {
         return new PickerStatusBreakdown(avail, busy, off, brkInit, brkRej, occ, other);
     }
 
-    private static PickerWorkflowSignals computeSignals(
+    /**
+     * Computes the PickerWorkflowSignals block. Package-private so unit tests can drive
+     * it with hand-built fixtures (no DB).
+     *
+     * <p>Vacuous-true suppression: when the dominant fact "picker has no zone access"
+     * (either {@code hasNoMemberships} or {@code hasGroupsButNoZones}) is true, secondary
+     * derived signals about queue activity in the picker's zones, and "only picker"
+     * claims, are forced to {@code false}. They would otherwise be vacuously true on
+     * empty inputs and mislead readers.
+     */
+    static PickerWorkflowSignals computeSignals(
             PickerStateRow p,
             List<ZoneGroupMembership> memberships,
             Set<Long> allZoneIds,
@@ -251,83 +290,81 @@ public class DiagnosePickerQueueTool {
             SiblingPickerSummary siblings) {
         boolean hasNoMemberships = memberships.isEmpty();
         boolean hasGroupsButNoZones = !memberships.isEmpty() && allZoneIds.isEmpty();
-        boolean noOpen = availableWork.openUnassignedPickListsAcrossPickerZones() == 0;
-        boolean openExist = availableWork.openUnassignedPickListsAcrossPickerZones() > 0;
+        boolean hasNoZoneAccess = hasNoMemberships || hasGroupsButNoZones;
+
+        int openCount = availableWork.openUnassignedPickListsAcrossPickerZones();
+        // Vacuous-true suppression: when the picker has no zone access, claims about
+        // "queue empty in their zones" or "they're the only picker" are vacuously true
+        // (universal quantifier over empty set). Force false; the dominant
+        // hasNoZoneGroupMemberships / hasZoneGroupsButNoZones signal carries the meaning.
+        boolean noOpen = !hasNoZoneAccess && openCount == 0;
+        boolean openExist = !hasNoZoneAccess && openCount > 0;
+
         String s = p.status() == null ? "" : p.status();
         boolean isOnBreak = "BREAK_INITIATED".equals(s) || "BREAK_REJECT_PICKLIST".equals(s);
         int siblingCount = siblings.countInSameZoneGroups();
         PickerStatusBreakdown sb = siblings.statusBreakdown();
+        // isOnlyPickerForOwnZoneGroups: only meaningful when picker has working zone access.
+        // Suppressed when no memberships (vacuously true — no peers possible without groups)
+        // and when groups have no zones (vacuous — competition is empty either way).
+        boolean isOnlyPicker = !hasNoZoneAccess && siblingCount == 0;
         boolean siblingsAllNonAvail = siblingCount > 0 && sb.available() == 0;
+
+        Map<String, String> notes = new LinkedHashMap<>();
+        notes.put("noOpenUnassignedPickListsInPickerZones",
+                "TRUE iff picker has zone access AND availableWork.openCount==0. Suppressed-vacuous when "
+                        + "no zone access. picker zone access=" + (!hasNoZoneAccess) + ", openCount=" + openCount + ".");
+        notes.put("openPickListsExistInPickerZones",
+                "TRUE iff picker has zone access AND availableWork.openCount>0. Suppressed-vacuous when "
+                        + "no zone access. picker zone access=" + (!hasNoZoneAccess) + ", openCount=" + openCount + ".");
+        notes.put("isOnlyPickerForOwnZoneGroups",
+                "TRUE iff picker has working zone access AND siblingCount==0. Suppressed-vacuous when "
+                        + "no zone access (no memberships OR groups have no active zones). picker zone access="
+                        + (!hasNoZoneAccess) + ", siblingCount=" + siblingCount + ".");
+        notes.put("siblingPickersAllNonAvailable",
+                "TRUE iff siblingCount>0 AND siblingStatusBreakdown.available==0. siblingCount="
+                        + siblingCount + ", available=" + sb.available() + ".");
+
         return new PickerWorkflowSignals(
                 /*pickerExists=*/true,
                 !p.active(),
                 p.deleted(),
                 hasNoMemberships,
                 hasGroupsButNoZones,
-                noOpen,
-                openExist,
                 "AVAILABLE".equals(s),
                 "BUSY".equals(s),
                 "OFFLINE".equals(s),
                 isOnBreak,
-                siblingCount == 0,
-                siblingsAllNonAvail);
+                noOpen,
+                openExist,
+                isOnlyPicker,
+                siblingsAllNonAvail,
+                notes);
     }
 
-    private static InterpretiveHints buildHints(String status, PickerWorkflowSignals signals) {
-        String meaning = status == null ? null
-                : PICKER_STATUS_MEANING.getOrDefault(status,
-                        "Unknown picker status enum value; check PickerStatus.java for additions.");
-        List<String> applicable = new ArrayList<>();
-        if (signals.isInactive()) {
-            applicable.add("Picker has active=false — disabled in the system. They won't be issued any pick_lists. Check why ops disabled them.");
+    static PickerStatusInterpretation buildPickerStatusInterpretation(String status) {
+        if (status == null) {
+            return null;
         }
-        if (signals.isDeleted()) {
-            applicable.add("Picker has deleted=true — soft-deleted. They will never receive work.");
+        PickerStatusInfo info = PICKER_STATUS_INFO.get(status);
+        if (info == null) {
+            return new PickerStatusInterpretation(status, PickerOperationalStage.OTHER,
+                    "Unknown picker status — check source for additions.",
+                    PICKER_STATUS_SOURCE_REF);
         }
-        if (signals.hasNoZoneGroupMemberships()) {
-            applicable.add("Picker is not in any zone_group. They have access to NO zones, so their queue will always be empty until ops adds them to a zone_group via the picker_zone_group table.");
-        } else if (signals.hasZoneGroupsButNoZones()) {
-            applicable.add("Picker is in zone_group(s), but those groups contain no active zones. Effectively the same as having no memberships — queue will be empty.");
-        }
-        if (signals.noOpenUnassignedPickListsInPickerZones() && !signals.hasNoZoneGroupMemberships()) {
-            applicable.add("Picker has zone access, but currently 0 OPEN unassigned pick_lists in any of their zones. Either no work has reached those zones yet (look upstream — replenishment / batch) or other pickers already claimed everything.");
-        }
-        if (signals.openPickListsExistInPickerZones()) {
-            applicable.add("Open unassigned pick_lists DO exist in the picker's zones (see availableWork.openUnassignedPickListsAcrossPickerZones). If this picker isn't getting them, check pickerStatus (must be AVAILABLE), and check sibling pickers — high BUSY count among siblings means competition is fierce.");
-        }
-        if (signals.pickerStatusOffline()) {
-            applicable.add("pickerStatus=OFFLINE. They aren't logged in — no assignments will go to them until they log into the picker app.");
-        }
-        if (signals.pickerStatusBusy()) {
-            applicable.add("pickerStatus=BUSY — they're already on a pick_list. Empty queue from their POV is normal until they finish.");
-        }
-        if (signals.pickerStatusOnBreak()) {
-            applicable.add("Picker is on break (BREAK_INITIATED / BREAK_REJECT_PICKLIST). Queue is paused for them.");
-        }
-        if (signals.isOnlyPickerForOwnZoneGroups()) {
-            applicable.add("This picker is the ONLY one configured for their zone group(s). If their queue is empty, no other picker can pick those PPs either — work just isn't there.");
-        }
-        if (signals.siblingPickersAllNonAvailable()) {
-            applicable.add("Sibling pickers exist for the same zone groups but none are AVAILABLE — they're all BUSY/OFFLINE/on break. This picker may be competing for work that's all already in flight.");
-        }
-        return new InterpretiveHints(meaning, applicable);
+        return new PickerStatusInterpretation(status, info.stage(), info.meaning(),
+                PICKER_STATUS_SOURCE_REF);
     }
 
     private static PickerQueueDiagnosisEvidence notFound(String code) {
         return new PickerQueueDiagnosisEvidence(
                 code, /*found=*/false, null, List.of(), null, List.of(), null,
-                new PickerWorkflowSignals(false, false, false, false, false, false, false, false, false, false, false, false, false),
+                new PickerWorkflowSignals(
+                        /*pickerExists=*/false,
+                        false, false, false, false,
+                        false, false, false, false,
+                        false, false, false, false,
+                        Map.of()),
                 null);
-    }
-
-    @SuppressWarnings("unused")
-    private static <K, V> LinkedHashMap<K, V> linkedMap() {
-        return new LinkedHashMap<>();
-    }
-
-    @SuppressWarnings("unused")
-    private static <T> HashSet<T> hashSet() {
-        return new HashSet<>();
     }
 }

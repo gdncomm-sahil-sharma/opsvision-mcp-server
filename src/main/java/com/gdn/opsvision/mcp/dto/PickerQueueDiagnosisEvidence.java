@@ -11,9 +11,19 @@ import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusBreakd
  * {@code diagnosePickPackage}. Single picker in, structured signals out for
  * "why is THIS picker's queue empty?" investigations.
  *
- * <p>Returns FACTS, not VERDICTS. The {@link PickerWorkflowSignals} block is a flat set of
- * pre-computed booleans the agent can scan to compose its answer (no zone groups, no
- * eligible zones, no open pick_lists in zones, picker offline, picker inactive, etc.).
+ * <p>Returns FACTS, not VERDICTS. The {@link PickerWorkflowSignals} block is a flat set
+ * of pre-computed booleans the agent can scan to compose its answer.
+ *
+ * <p>Vacuous-true suppression: when the dominant fact "picker has no zone access at
+ * all" is true, secondary signals like {@code noOpenUnassignedPickListsInPickerZones}
+ * and {@code isOnlyPickerForOwnZoneGroups} are forced to {@code false} — they would
+ * otherwise be vacuously true (universal-quantifier over empty set) and mislead the
+ * agent into reading "they're the only picker" or "queue is empty" when the real
+ * problem is "no zones configured."
+ *
+ * <p>{@link PickerWorkflowSignals#derivationNotes()} carries a one-liner per derived
+ * boolean explaining the rule and inputs, so a buggy derivation is detectable from
+ * the evidence pack itself.
  */
 public record PickerQueueDiagnosisEvidence(
         String pickerCodeOrId,
@@ -24,7 +34,7 @@ public record PickerQueueDiagnosisEvidence(
         List<ZoneActivity> zoneBreakdown,
         SiblingPickerSummary siblingPickers,
         PickerWorkflowSignals signals,
-        InterpretiveHints hints) {
+        PickerStatusInterpretation pickerStatusInterpretation) {
 
     /** Section 1 — picker row state. */
     public record PickerState(
@@ -102,27 +112,55 @@ public record PickerQueueDiagnosisEvidence(
             PickerStatusBreakdown statusBreakdown) {
     }
 
-    /** Section 6 — pre-computed boolean signals derived from sections 1–5. */
+    /**
+     * Section 6 — pre-computed boolean signals.
+     *
+     * <p>Two flavors: <b>state-equality booleans</b> (cheap, deterministic; e.g.
+     * {@code pickerStatusAvailable} is just {@code picker.status=="AVAILABLE"}) and
+     * <b>derived booleans</b> computed from multiple inputs.
+     * {@link #derivationNotes()} carries a one-liner per derived signal explaining
+     * the rule + inputs.
+     *
+     * <p>Vacuous-true suppression rules applied:
+     * <ul>
+     *   <li>{@code noOpenUnassignedPickListsInPickerZones}, {@code openPickListsExistInPickerZones},
+     *       {@code isOnlyPickerForOwnZoneGroups} are forced {@code false} when
+     *       {@code hasNoZoneGroupMemberships=true} OR {@code hasZoneGroupsButNoZones=true} —
+     *       picker has no zone access, so claims about "queue in picker's zones" or
+     *       "only picker for groups" are vacuous.</li>
+     *   <li>{@code siblingPickersAllNonAvailable} is forced {@code false} when there are
+     *       zero siblings — no peers can't be "all non-available."</li>
+     * </ul>
+     */
     public record PickerWorkflowSignals(
+            // existence + state-equality booleans
             boolean pickerExists,
             boolean isInactive,
             boolean isDeleted,
             boolean hasNoZoneGroupMemberships,
             boolean hasZoneGroupsButNoZones,
-            boolean noOpenUnassignedPickListsInPickerZones,
-            boolean openPickListsExistInPickerZones,
             boolean pickerStatusAvailable,
             boolean pickerStatusBusy,
             boolean pickerStatusOffline,
             boolean pickerStatusOnBreak,
+            // derived booleans — see derivationNotes for the rule
+            boolean noOpenUnassignedPickListsInPickerZones,
+            boolean openPickListsExistInPickerZones,
             boolean isOnlyPickerForOwnZoneGroups,
-            boolean siblingPickersAllNonAvailable) {
+            boolean siblingPickersAllNonAvailable,
+            // per-derived-signal one-liner
+            Map<String, String> derivationNotes) {
     }
 
-    /** Section 7 — plain-English meanings + applicable hints. */
-    public record InterpretiveHints(
-            String pickerStatusMeaning,
-            List<String> applicableHints) {
+    /**
+     * Replaces {@code applicableHints} list. One short meaning + structured stage +
+     * source-file ref.
+     */
+    public record PickerStatusInterpretation(
+            String label,
+            PickerOperationalStage operationalStage,
+            String meaning,
+            String sourceRef) {
     }
 
     /** Convenience holder for tool-side aggregation. */

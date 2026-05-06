@@ -1,0 +1,226 @@
+package com.gdn.opsvision.mcp.tool;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.DemandShortage;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickListAllocation;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusBreakdown;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.ReplenishmentSignal;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.WorkflowSignals;
+import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.PpStateRow;
+
+/**
+ * Fixture-based unit tests for {@link DiagnosePickPackageTool#computeSignals}. No DB.
+ * Covers vacuous-true suppression and the derivation-notes contract.
+ *
+ * <p>Each test hand-builds the inputs computeSignals consumes, calls it, and asserts
+ * which derived booleans fire. The notes map is asserted to contain a non-empty entry
+ * for each derived signal so the derivation contract holds.
+ */
+class DiagnosePickPackageToolSignalsTest {
+
+    private static final List<String> DERIVED_KEYS = List.of(
+            "hasAnyOpenPickList",
+            "hasNoEligiblePickerForAnyOpenPickList",
+            "hasEligiblePickersButNoneAvailable",
+            "hasReplenishmentDeficit",
+            "hasMultipleSourceAreas",
+            "isInBatchOrWave");
+
+    @Test
+    void emptyInputs_noDerivedFlagsFire_andNotesPresentForAll() {
+        // PP exists but: no allocations, no shortages, no source areas, no batch.
+        PpStateRow s = ppOpen("READY_FOR_MANUAL_PICKING");
+        ReplenishmentSignal repl = new ReplenishmentSignal(false, List.of());
+        BatchConsolidation batch = batchAbsent();
+
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), repl, List.of(), batch);
+
+        assertThat(out.hasAnyOpenPickList()).isFalse();
+        // Vacuous-true suppression on derived signals over empty inputs:
+        assertThat(out.hasNoEligiblePickerForAnyOpenPickList()).isFalse();
+        assertThat(out.hasEligiblePickersButNoneAvailable()).isFalse();
+        assertThat(out.hasReplenishmentDeficit()).isFalse();
+        assertThat(out.hasMultipleSourceAreas()).isFalse();
+        assertThat(out.isInBatchOrWave()).isFalse();
+        // Enum-equality booleans:
+        assertThat(out.isReadyForManualPicking()).isTrue();
+        assertThat(out.isAwbPending()).isFalse();
+        // Derivation notes present for every derived signal:
+        assertNotesPresentForAllDerived(out.derivationNotes());
+    }
+
+    @Test
+    void singleSourceArea_doesNotFireMultipleSourceAreas() {
+        // Vacuous-suppression-adjacent: one area should NOT trip hasMultipleSourceAreas.
+        PpStateRow s = ppOpen("PARTIAL_PACKAGE");
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), new ReplenishmentSignal(false, List.of()),
+                List.of("M4-STOR"), batchAbsent());
+
+        assertThat(out.hasMultipleSourceAreas()).isFalse();
+        assertThat(out.derivationNotes().get("hasMultipleSourceAreas"))
+                .contains("size>1")
+                .contains("size=1");
+    }
+
+    @Test
+    void multipleSourceAreas_firesMultipleSourceAreas() {
+        PpStateRow s = ppOpen("PARTIAL_PACKAGE");
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), new ReplenishmentSignal(false, List.of()),
+                List.of("M4-STOR", "GF-STOR"), batchAbsent());
+
+        assertThat(out.hasMultipleSourceAreas()).isTrue();
+    }
+
+    @Test
+    void openUnassignedPlWithZeroEligiblePickers_firesNoEligibleForAnyOpen() {
+        // Real production-pattern hit case (sample PP M from validation set).
+        PpStateRow s = ppOpen("PARTIAL_PACKAGE");
+        PickListAllocation pl = openUnassignedPl(/*eligibleCount=*/0, /*available=*/0);
+
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(pl), new ReplenishmentSignal(false, List.of()),
+                List.of("M4-STOR"), batchAbsent());
+
+        assertThat(out.hasAnyOpenPickList()).isTrue();
+        assertThat(out.hasNoEligiblePickerForAnyOpenPickList()).isTrue();
+        assertThat(out.hasEligiblePickersButNoneAvailable()).isFalse();
+        assertThat(out.derivationNotes().get("hasNoEligiblePickerForAnyOpenPickList"))
+                .contains("1 OPEN+unassigned PL")
+                .contains("0 had any eligible picker");
+    }
+
+    @Test
+    void eligiblePickersExistButAllNonAvailable_firesNoneAvailable() {
+        PpStateRow s = ppOpen("PARTIAL_PACKAGE");
+        PickListAllocation pl = openUnassignedPl(/*eligibleCount=*/5, /*available=*/0);
+
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(pl), new ReplenishmentSignal(false, List.of()),
+                List.of("M4-STOR"), batchAbsent());
+
+        assertThat(out.hasAnyOpenPickList()).isTrue();
+        assertThat(out.hasNoEligiblePickerForAnyOpenPickList()).isFalse();
+        assertThat(out.hasEligiblePickersButNoneAvailable()).isTrue();
+    }
+
+    @Test
+    void closedPlsOnly_doesNotFireOpenPlSignals() {
+        PpStateRow s = ppOpen("REACHED_TO_QC");
+        PickListAllocation pl = closedPl();
+
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(pl), new ReplenishmentSignal(false, List.of()),
+                List.of("M4-STOR"), batchAbsent());
+
+        assertThat(out.hasAnyOpenPickList()).isFalse();
+        assertThat(out.hasNoEligiblePickerForAnyOpenPickList()).isFalse();
+        assertThat(out.hasEligiblePickersButNoneAvailable()).isFalse();
+        assertThat(out.derivationNotes().get("hasNoEligiblePickerForAnyOpenPickList"))
+                .contains("0 OPEN+unassigned PL");
+    }
+
+    @Test
+    void replenishmentDeficitFiresOnlyWhenDeficitGtZero() {
+        PpStateRow s = ppOpen("STORAGE_NOT_AVAILABLE");
+        ReplenishmentSignal noShort = new ReplenishmentSignal(true, List.of(
+                new DemandShortage("SKU-A", 5, 5, 0)));
+        ReplenishmentSignal yesShort = new ReplenishmentSignal(true, List.of(
+                new DemandShortage("SKU-A", 5, 2, 3)));
+
+        WorkflowSignals okOut = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), noShort, List.of(), batchAbsent());
+        WorkflowSignals defOut = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), yesShort, List.of(), batchAbsent());
+
+        assertThat(okOut.hasReplenishmentDeficit()).isFalse();
+        assertThat(defOut.hasReplenishmentDeficit()).isTrue();
+        assertThat(defOut.derivationNotes().get("hasReplenishmentDeficit"))
+                .contains("1 had deficit>0");
+    }
+
+    @Test
+    void inBatchTrueOnlyWhenBatchConsolidationFlagSet() {
+        PpStateRow s = ppOpen("PARTIAL_PACKAGE");
+        BatchConsolidation absent = batchAbsent();
+        BatchConsolidation present = new BatchConsolidation(
+                true, "uuid-123", null, null, 2, Map.of("PARTIAL_PACKAGE", 2), Map.of("OPEN", 2));
+
+        WorkflowSignals outAbsent = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), new ReplenishmentSignal(false, List.of()), List.of(), absent);
+        WorkflowSignals outPresent = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), new ReplenishmentSignal(false, List.of()), List.of(), present);
+
+        assertThat(outAbsent.isInBatchOrWave()).isFalse();
+        assertThat(outPresent.isInBatchOrWave()).isTrue();
+    }
+
+    // ─── fixtures ────────────────────────────────────────────────────────────
+
+    private static PpStateRow ppOpen(String pickingStatus) {
+        return new PpStateRow(
+                /*ppId*/ 1L, /*ppCode*/ "PK/MAR-01/I-2026/1", /*status*/ 0,
+                /*pickingStatus*/ pickingStatus,
+                /*canceled*/ false,
+                /*inProgress*/ Boolean.TRUE,
+                /*shortPick*/ Boolean.FALSE,
+                /*deprioritized*/ Boolean.FALSE,
+                /*rejected*/ Boolean.FALSE,
+                /*priorityBoosted*/ Boolean.FALSE,
+                /*assignedPickerId*/ null, /*assignedPickerCode*/ null,
+                /*assignedPickerDate*/ null,
+                /*distributionZoneCode*/ null,
+                /*batchId*/ null, /*batchType*/ null, /*waveNumber*/ null,
+                /*createdDate*/ Instant.now(),
+                /*updatedDate*/ Instant.now(),
+                /*autoCancelDate*/ null,
+                /*siteCode*/ "MAR-0000000001");
+    }
+
+    private static PickListAllocation openUnassignedPl(int eligibleCount, int available) {
+        return new PickListAllocation(
+                /*pickListId*/ 1L, /*pickListStatus*/ "OPEN",
+                /*allottedZoneId*/ 100L, /*allottedZoneCode*/ "M4-STO-1W",
+                /*pickerId*/ null, /*pickerCode*/ null, /*pickerStatus*/ null,
+                /*priority*/ 0L, /*pickingPriorityLevelId*/ 1L, /*pickingPriorityPrecedence*/ 0,
+                /*subLevelPriority*/ 0L, /*createdDate*/ Instant.now(),
+                /*sourceAreaCodes*/ List.of("M4-STOR"),
+                eligibleCount,
+                new PickerStatusBreakdown(
+                        available,
+                        Math.max(0, eligibleCount - available), 0, 0, 0, 0, 0),
+                /*queueRankAmongOpen*/ 1, /*openPickListsInZone*/ 1);
+    }
+
+    private static PickListAllocation closedPl() {
+        return new PickListAllocation(
+                1L, "CLOSED", 100L, "M4-STO-1W",
+                23L, "PIC-23", "OFFLINE",
+                0L, 1L, 0, 0L, Instant.now(),
+                List.of("M4-STOR"),
+                100, new PickerStatusBreakdown(5, 50, 45, 0, 0, 0, 0),
+                null, null);
+    }
+
+    private static BatchConsolidation batchAbsent() {
+        return new BatchConsolidation(false, null, null, null, 0, Map.of(), Map.of());
+    }
+
+    private static void assertNotesPresentForAllDerived(Map<String, String> notes) {
+        assertThat(notes).isNotNull();
+        for (String key : DERIVED_KEYS) {
+            assertThat(notes).containsKey(key);
+            assertThat(notes.get(key)).isNotBlank();
+        }
+    }
+}
