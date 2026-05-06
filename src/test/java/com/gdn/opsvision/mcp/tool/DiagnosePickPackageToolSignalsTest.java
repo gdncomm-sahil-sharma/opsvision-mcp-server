@@ -8,9 +8,11 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
+import com.gdn.opsvision.mcp.dto.PackingOrderLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickListLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.DemandShortage;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PackingOrderInfo;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickListAllocation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusBreakdown;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.ReplenishmentSignal;
@@ -33,7 +35,8 @@ class DiagnosePickPackageToolSignalsTest {
             "hasEligiblePickersButNoneAvailable",
             "hasReplenishmentDeficit",
             "hasMultipleSourceAreas",
-            "isInBatchOrWave");
+            "isInBatchOrWave",
+            "packingOrderMissing");
 
     @Test
     void emptyInputs_noDerivedFlagsFire_andNotesPresentForAll() {
@@ -43,7 +46,7 @@ class DiagnosePickPackageToolSignalsTest {
         BatchConsolidation batch = batchAbsent();
 
         WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
-                s, List.of(), repl, List.of(), batch);
+                s, List.of(), repl, List.of(), batch, packingOrderAbsent());
 
         assertThat(out.hasAnyOpenPickList()).isFalse();
         // Vacuous-true suppression on derived signals over empty inputs:
@@ -65,7 +68,7 @@ class DiagnosePickPackageToolSignalsTest {
         PpStateRow s = ppOpen("PARTIAL_PACKAGE");
         WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
                 s, List.of(), new ReplenishmentSignal(false, List.of()),
-                List.of("M4-STOR"), batchAbsent());
+                List.of("M4-STOR"), batchAbsent(), packingOrderAbsent());
 
         assertThat(out.hasMultipleSourceAreas()).isFalse();
         assertThat(out.derivationNotes().get("hasMultipleSourceAreas"))
@@ -78,7 +81,7 @@ class DiagnosePickPackageToolSignalsTest {
         PpStateRow s = ppOpen("PARTIAL_PACKAGE");
         WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
                 s, List.of(), new ReplenishmentSignal(false, List.of()),
-                List.of("M4-STOR", "GF-STOR"), batchAbsent());
+                List.of("M4-STOR", "GF-STOR"), batchAbsent(), packingOrderAbsent());
 
         assertThat(out.hasMultipleSourceAreas()).isTrue();
     }
@@ -91,7 +94,7 @@ class DiagnosePickPackageToolSignalsTest {
 
         WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
                 s, List.of(pl), new ReplenishmentSignal(false, List.of()),
-                List.of("M4-STOR"), batchAbsent());
+                List.of("M4-STOR"), batchAbsent(), packingOrderAbsent());
 
         assertThat(out.hasAnyOpenPickList()).isTrue();
         assertThat(out.hasNoEligiblePickerForAnyOpenPickList()).isTrue();
@@ -108,7 +111,7 @@ class DiagnosePickPackageToolSignalsTest {
 
         WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
                 s, List.of(pl), new ReplenishmentSignal(false, List.of()),
-                List.of("M4-STOR"), batchAbsent());
+                List.of("M4-STOR"), batchAbsent(), packingOrderAbsent());
 
         assertThat(out.hasAnyOpenPickList()).isTrue();
         assertThat(out.hasNoEligiblePickerForAnyOpenPickList()).isFalse();
@@ -122,7 +125,7 @@ class DiagnosePickPackageToolSignalsTest {
 
         WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
                 s, List.of(pl), new ReplenishmentSignal(false, List.of()),
-                List.of("M4-STOR"), batchAbsent());
+                List.of("M4-STOR"), batchAbsent(), packingOrderAbsent());
 
         assertThat(out.hasAnyOpenPickList()).isFalse();
         assertThat(out.hasNoEligiblePickerForAnyOpenPickList()).isFalse();
@@ -140,14 +143,47 @@ class DiagnosePickPackageToolSignalsTest {
                 new DemandShortage("SKU-A", 5, 2, 3)));
 
         WorkflowSignals okOut = DiagnosePickPackageTool.computeSignals(
-                s, List.of(), noShort, List.of(), batchAbsent());
+                s, List.of(), noShort, List.of(), batchAbsent(), packingOrderAbsent());
         WorkflowSignals defOut = DiagnosePickPackageTool.computeSignals(
-                s, List.of(), yesShort, List.of(), batchAbsent());
+                s, List.of(), yesShort, List.of(), batchAbsent(), packingOrderAbsent());
 
         assertThat(okOut.hasReplenishmentDeficit()).isFalse();
         assertThat(defOut.hasReplenishmentDeficit()).isTrue();
         assertThat(defOut.derivationNotes().get("hasReplenishmentDeficit"))
                 .contains("1 had deficit>0");
+    }
+
+    @Test
+    void packingOrderMissing_firesOnPostPickWithNoPackingOrder() {
+        // Pattern C confirmation: PP at REACHED_TO_QC but no packing_order present.
+        PpStateRow s = ppOpen("REACHED_TO_QC");
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), new ReplenishmentSignal(false, List.of()),
+                List.of(), batchAbsent(), packingOrderAbsent());
+        assertThat(out.packingOrderMissing()).isTrue();
+        assertThat(out.derivationNotes().get("packingOrderMissing"))
+                .contains("REACHED_TO_QC")
+                .contains("packingOrder.present=false");
+    }
+
+    @Test
+    void packingOrderMissing_doesNotFireOnPrePickPp() {
+        // Pre-pick PP: packing_order legitimately absent — signal must not fire.
+        PpStateRow s = ppOpen("PARTIAL_PACKAGE");
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), new ReplenishmentSignal(false, List.of()),
+                List.of(), batchAbsent(), packingOrderAbsent());
+        assertThat(out.packingOrderMissing()).isFalse();
+    }
+
+    @Test
+    void packingOrderMissing_doesNotFireWhenPackingOrderPresent() {
+        // Healthy: PP at REACHED_TO_QC with a CLAIMED packing_order.
+        PpStateRow s = ppOpen("REACHED_TO_QC");
+        WorkflowSignals out = DiagnosePickPackageTool.computeSignals(
+                s, List.of(), new ReplenishmentSignal(false, List.of()),
+                List.of(), batchAbsent(), packingOrderClaimed());
+        assertThat(out.packingOrderMissing()).isFalse();
     }
 
     @Test
@@ -158,9 +194,9 @@ class DiagnosePickPackageToolSignalsTest {
                 true, "uuid-123", null, null, 2, Map.of("PARTIAL_PACKAGE", 2), Map.of("OPEN", 2));
 
         WorkflowSignals outAbsent = DiagnosePickPackageTool.computeSignals(
-                s, List.of(), new ReplenishmentSignal(false, List.of()), List.of(), absent);
+                s, List.of(), new ReplenishmentSignal(false, List.of()), List.of(), absent, packingOrderAbsent());
         WorkflowSignals outPresent = DiagnosePickPackageTool.computeSignals(
-                s, List.of(), new ReplenishmentSignal(false, List.of()), List.of(), present);
+                s, List.of(), new ReplenishmentSignal(false, List.of()), List.of(), present, packingOrderAbsent());
 
         assertThat(outAbsent.isInBatchOrWave()).isFalse();
         assertThat(outPresent.isInBatchOrWave()).isTrue();
@@ -217,6 +253,18 @@ class DiagnosePickPackageToolSignalsTest {
 
     private static BatchConsolidation batchAbsent() {
         return new BatchConsolidation(false, null, null, null, 0, Map.of(), Map.of());
+    }
+
+    private static PackingOrderInfo packingOrderAbsent() {
+        return new PackingOrderInfo(
+                false, null, null, null, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    private static PackingOrderInfo packingOrderClaimed() {
+        return new PackingOrderInfo(
+                true, 100L, "PCK-001", PackingOrderLifecycleStage.CLAIMED,
+                true, true, false, "PCK-1", Instant.now(),
+                null, null, "GF-PSU", Instant.now(), Instant.now());
     }
 
     private static void assertNotesPresentForAllDerived(Map<String, String> notes) {

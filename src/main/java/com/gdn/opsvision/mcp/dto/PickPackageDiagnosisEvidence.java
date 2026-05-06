@@ -38,6 +38,7 @@ public record PickPackageDiagnosisEvidence(
         List<SourceAreaCoverage> sourceAreas,
         ReplenishmentSignal replenishment,
         BatchConsolidation batchConsolidation,
+        PackingOrderInfo packingOrder,
         WorkflowSignals signals,
         StatusInterpretation pickingStatusInterpretation,
         StatusInterpretation ppStatusInterpretation) {
@@ -201,6 +202,10 @@ public record PickPackageDiagnosisEvidence(
             boolean hasReplenishmentDeficit,
             boolean hasMultipleSourceAreas,
             boolean isInBatchOrWave,
+            // Pattern C downstream confirmation: PP picking finished but no packing_order
+            // ever created (or it was hard-deleted). True iff picking_status is post-pick
+            // (REACHED_TO_QC / PICKING_COMPLETE) AND packingOrder.present is false.
+            boolean packingOrderMissing,
             // per-derived-signal one-liner: input fields considered + rule applied
             Map<String, String> derivationNotes) {
     }
@@ -217,6 +222,36 @@ public record PickPackageDiagnosisEvidence(
             LifecycleStage lifecycleStage,
             String meaning,
             String sourceRef) {
+    }
+
+    /**
+     * Active {@code packing_order} for the PP, or {@code present:false} if no row exists.
+     *
+     * <p>Pattern C confirmation: a PP whose {@code picking_status} is in the post-pick
+     * stages (REACHED_TO_QC, PICKING_COMPLETE) but with {@code present:false} here is
+     * stuck — picking finished but the packing-handoff service never ran. The
+     * {@code wcsConsolidationStuck} boolean on the related {@link PickPackageEvidence.HandlingUnit}
+     * is the proximate cause; this {@code packingOrder.present:false} is the downstream
+     * confirmation.
+     *
+     * <p>{@link PackingOrderLifecycleStage} is derived from
+     * {@code (active, claimed_date, good_issued_note)} per PackingService.java transitions.
+     */
+    public record PackingOrderInfo(
+            boolean present,
+            Long packingOrderId,
+            String packingOrderCode,
+            PackingOrderLifecycleStage lifecycleStage,
+            Boolean active,
+            Boolean hasAwbInfo,
+            Boolean hasGoodIssuedNote,
+            String claimedBy,
+            Instant claimedDate,
+            String reClaimedBy,
+            Instant reClaimedDate,
+            String workZoneCode,
+            Instant createdDate,
+            Instant lastModifiedDate) {
     }
 
     public record PickerStatusBreakdown(

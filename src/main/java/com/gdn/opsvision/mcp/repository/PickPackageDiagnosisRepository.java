@@ -49,6 +49,38 @@ public class PickPackageDiagnosisRepository {
         return n != null && n > 0;
     }
 
+    /**
+     * Latest active packing_order for a PP, or empty if no row exists. Returns ALL
+     * packing_orders if none are active (so the agent can detect "row exists but
+     * deactivated" vs "row never created"); active rows take precedence by ordering.
+     *
+     * <p>QA2 distribution shows ~99% of packing_order rows have {@code active=true};
+     * soft-deletion is rare (rows are usually hard-deleted by service code instead).
+     */
+    public Optional<PackingOrderRow> findLatestPackingOrderForPp(long ppId) {
+        return stockholm.sql("""
+                        SELECT po.id,
+                               po.code,
+                               po.active,
+                               po.awb_info,
+                               po.good_issued_note,
+                               po.claimed_by,
+                               po.claimed_date,
+                               po.re_claimed_by,
+                               po.re_claimed_date,
+                               po.work_zone_code,
+                               po.created_date,
+                               po.last_modified_date
+                          FROM packing_order po
+                         WHERE po.pick_package = :ppId
+                         ORDER BY po.active DESC, po.last_modified_date DESC, po.id DESC
+                         LIMIT 1
+                        """)
+                .param("ppId", ppId)
+                .query(PackingOrderRow.class)
+                .optional();
+    }
+
     /** PP header + assigned-picker join + siteCode + batch/wave (one row, or empty if PP gone). */
     public Optional<PpStateRow> findStateById(long ppId) {
         return stockholm.sql("""
@@ -247,6 +279,21 @@ public class PickPackageDiagnosisRepository {
     }
 
     public record BatchSiblingRow(String pickingStatus, int status) {
+    }
+
+    public record PackingOrderRow(
+            long id,
+            String code,
+            boolean active,
+            Long awbInfo,
+            Long goodIssuedNote,
+            String claimedBy,
+            Instant claimedDate,
+            String reClaimedBy,
+            Instant reClaimedDate,
+            String workZoneCode,
+            Instant createdDate,
+            Instant lastModifiedDate) {
     }
 
     public record PpPriorityRow(

@@ -12,10 +12,12 @@ import org.springframework.stereotype.Service;
 
 import com.gdn.opsvision.mcp.dto.InventoryForItemEvidence.WarehouseItemMaster;
 import com.gdn.opsvision.mcp.dto.LifecycleStage;
+import com.gdn.opsvision.mcp.dto.PackingOrderLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickListLifecycleStage;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.BatchConsolidation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.DemandShortage;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PackingOrderInfo;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickListAllocation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickPackagePriority;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickPackageState;
@@ -28,6 +30,7 @@ import com.gdn.opsvision.mcp.repository.InventoryRepository;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.BatchSiblingRow;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.DemandRow;
+import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.PackingOrderRow;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.PickListAllocationRow;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.PpPriorityRow;
 import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.PpStateRow;
@@ -281,8 +284,11 @@ public class DiagnosePickPackageTool {
         // §5b batch / wave consolidation — sibling breakdown
         BatchConsolidation batchConsolidation = computeBatchConsolidation(ppId, s);
 
+        // §5c packing_order presence + stage (Pattern C downstream confirmation)
+        PackingOrderInfo packingOrder = computePackingOrder(ppId);
+
         // §6 derived booleans + per-derivation notes
-        WorkflowSignals signals = computeSignals(s, pickListAllocations, replenishment, distinctSourceAreas, batchConsolidation);
+        WorkflowSignals signals = computeSignals(s, pickListAllocations, replenishment, distinctSourceAreas, batchConsolidation, packingOrder);
 
         // §7 structured status interpretations (replaces previous applicableHints prose)
         StatusInterpretation pickingInterp = buildPickingStatusInterpretation(s.pickingStatus());
@@ -297,6 +303,7 @@ public class DiagnosePickPackageTool {
                 sourceAreas,
                 replenishment,
                 batchConsolidation,
+                packingOrder,
                 signals,
                 pickingInterp,
                 ppInterp);
@@ -363,7 +370,7 @@ public class DiagnosePickPackageTool {
 
     private static PickPackageDiagnosisEvidence notFound(String code) {
         return new PickPackageDiagnosisEvidence(
-                code, /*found=*/false, null, null, List.of(), List.of(), null, null, null, null, null);
+                code, /*found=*/false, null, null, List.of(), List.of(), null, null, null, null, null, null);
     }
 
     // ─── eligible-picker computation ────────────────────────────────────────
@@ -458,6 +465,40 @@ public class DiagnosePickPackageTool {
                 siblings.size(), pickingBreakdown, ppStatusBreakdown);
     }
 
+    // ─── packing order ──────────────────────────────────────────────────────
+
+    /**
+     * Resolve the latest packing_order for a PP. Returns a {@code present:false}
+     * record if no row exists — this is the Pattern C downstream confirmation
+     * (PP picked but no packing_order ever created).
+     */
+    PackingOrderInfo computePackingOrder(long ppId) {
+        return diagnosisRepo.findLatestPackingOrderForPp(ppId)
+                .map(DiagnosePickPackageTool::mapPackingOrder)
+                .orElseGet(() -> new PackingOrderInfo(
+                        false, null, null, null, null, null, null, null, null, null, null, null, null, null));
+    }
+
+    private static PackingOrderInfo mapPackingOrder(PackingOrderRow r) {
+        PackingOrderLifecycleStage stage = PackingOrderLifecycleStage.forPackingOrder(
+                r.active(), r.claimedDate(), r.goodIssuedNote());
+        return new PackingOrderInfo(
+                true,
+                r.id(),
+                r.code(),
+                stage,
+                r.active(),
+                r.awbInfo() != null,
+                r.goodIssuedNote() != null,
+                r.claimedBy(),
+                r.claimedDate(),
+                r.reClaimedBy(),
+                r.reClaimedDate(),
+                r.workZoneCode(),
+                r.createdDate(),
+                r.lastModifiedDate());
+    }
+
     // ─── boolean signal derivation ──────────────────────────────────────────
 
     /**
@@ -481,7 +522,8 @@ public class DiagnosePickPackageTool {
             List<PickListAllocation> allocations,
             ReplenishmentSignal replenishment,
             List<String> distinctSourceAreas,
-            BatchConsolidation batchConsolidation) {
+            BatchConsolidation batchConsolidation,
+            PackingOrderInfo packingOrder) {
         String ps = s.pickingStatus() == null ? "" : s.pickingStatus();
         int statusInt = s.status();
         boolean isCanceled = s.canceled();
@@ -520,6 +562,12 @@ public class DiagnosePickPackageTool {
                 !distinctSourceAreas.isEmpty() && distinctSourceAreas.size() > 1;
         boolean inBatch = batchConsolidation != null && batchConsolidation.inBatch();
 
+        // Pattern C downstream: post-pick PP missing its packing_order.
+        boolean isPostPick = "REACHED_TO_QC".equals(ps) || "PICKING_COMPLETE".equals(ps)
+                || "QC_COMPLETE".equals(ps);
+        boolean packingOrderPresent = packingOrder != null && packingOrder.present();
+        boolean packingOrderMissing = isPostPick && !packingOrderPresent;
+
         Map<String, String> notes = new LinkedHashMap<>();
         notes.put("hasAnyOpenPickList",
                 "TRUE iff any pickListAllocations row has status=OPEN AND pickerId=null. Considered "
@@ -542,6 +590,11 @@ public class DiagnosePickPackageTool {
         notes.put("isInBatchOrWave",
                 "TRUE iff batchConsolidation.inBatch (i.e. pp.batch_id or pp.wave_number is non-blank). batchConsolidation.inBatch="
                         + inBatch + ".");
+        notes.put("packingOrderMissing",
+                "TRUE iff picking_status is post-pick (REACHED_TO_QC / PICKING_COMPLETE / QC_COMPLETE) "
+                        + "AND no active packing_order row exists. picking_status=" + ps
+                        + ", packingOrder.present=" + packingOrderPresent
+                        + ". Pattern C downstream confirmation.");
 
         return new WorkflowSignals(
                 // picking_status booleans
@@ -576,6 +629,7 @@ public class DiagnosePickPackageTool {
                 hasReplenishmentDeficit,
                 hasMultipleSourceAreas,
                 inBatch,
+                packingOrderMissing,
                 notes);
     }
 
