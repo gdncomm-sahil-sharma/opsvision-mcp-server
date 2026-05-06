@@ -7,6 +7,8 @@ import org.springframework.context.annotation.Configuration;
 
 import com.gdn.opsvision.mcp.tool.FindPickingTaskRequestsTool;
 import com.gdn.opsvision.mcp.tool.FindPickingTasksTool;
+import com.gdn.opsvision.mcp.tool.GetSalesOrderTool;
+import com.gdn.opsvision.mcp.tool.GetStockHistoryForItemTool;
 import com.gdn.opsvision.mcp.tool.InventoryForItemTool;
 import com.gdn.opsvision.mcp.tool.MovementHistoryTool;
 import com.gdn.opsvision.mcp.tool.PickListReadinessTool;
@@ -32,12 +34,15 @@ public class McpToolsConfig {
             StockTraceTool stockTraceTool,
             MovementHistoryTool movementHistoryTool,
             FindPickingTasksTool findPickingTasksTool,
-            FindPickingTaskRequestsTool findPickingTaskRequestsTool) {
+            FindPickingTaskRequestsTool findPickingTaskRequestsTool,
+            GetSalesOrderTool getSalesOrderTool,
+            GetStockHistoryForItemTool getStockHistoryForItemTool) {
         return MethodToolCallbackProvider.builder()
                 .toolObjects(pickPackageTool, pickListTool, pickListReadinessTool,
                         inventoryForItemTool, reconciliationTool, stockTraceTool,
                         movementHistoryTool, findPickingTasksTool,
-                        findPickingTaskRequestsTool)
+                        findPickingTaskRequestsTool,
+                        getSalesOrderTool, getStockHistoryForItemTool)
                 .build();
     }
 }

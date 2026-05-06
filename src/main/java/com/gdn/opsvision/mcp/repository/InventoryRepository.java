@@ -112,6 +112,32 @@ public class InventoryRepository {
         return s;
     }
 
+    /**
+     * Slim WIM lookup for a (sku, site) pair — returns {@code (id, stockIndicator)} only,
+     * without the aggregate / bin / stock-quantity payload. Used by
+     * {@code getStockHistoryForItem} to enumerate WIMs (typically 1 UNRESTRICTED + optionally
+     * 1 RESTRICTED) before running per-WIM stock_history queries. Returns an empty list if
+     * the SKU isn't onboarded at the site.
+     */
+    public List<WimRef> findWimsBySkuAndSite(String skuCode, String siteCode) {
+        return inventory.sql("""
+                        SELECT wim.id              AS wim_id,
+                               wim.stock_indicator
+                          FROM warehouse_item_master wim
+                          JOIN warehouse w ON w.id = wim.warehouse
+                          JOIN item      i ON i.id = wim.item
+                         WHERE w.code = :site AND i.code = :sku
+                         ORDER BY wim.id
+                        """)
+                .param("site", siteCode)
+                .param("sku", skuCode)
+                .query(WimRef.class)
+                .list();
+    }
+
+    public record WimRef(long wimId, String stockIndicator) {
+    }
+
     private Map<Long, List<BinRow>> fetchBinsForWims(List<Long> wimIds) {
         if (wimIds.isEmpty()) {
             return Map.of();
