@@ -2,6 +2,7 @@ package com.gdn.opsvision.mcp.dto;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Evidence pack for {@code findReservationDriftHotspots} — site-wide scan that surfaces
@@ -55,6 +56,16 @@ public record ReservationDriftHotspotsEvidence(
      * this WIM in the {@code [sinceDate, now)} window when {@code sinceDate} is set, or
      * lifetime-most-recent otherwise. {@code null} if the WIM has no stock_history rows.
      */
+    /**
+     * One drifted WIM, plus a bin-condition breakdown rolled up across all bins for
+     * the WIM. {@code binConditionBreakdown} keys are normalized
+     * {@code warehouse_item_bin_master.blocked_type} values: {@code "OK"} for bins
+     * with NULL/empty blocked_type, otherwise the verbatim blocked_type string
+     * ({@code DAMAGED_CONDITION}, {@code ITEM_NOT_FOUND}, {@code Expired},
+     * {@code STORAGE_NOT_FOUND}, plus any operator free-text). Counts sum to
+     * {@code binCount}. Lets the agent answer "is this drift on healthy stock or
+     * on flagged bins?" without drilling into individual bins.
+     */
     public record DriftHotspot(
             long wimId,
             String skuCode,
@@ -72,6 +83,7 @@ public record ReservationDriftHotspotsEvidence(
             int reservedDivergence,
             int absoluteTotalDrift,
             int binCount,
+            Map<String, Long> binConditionBreakdown,
             Instant lastActivityAt) {
     }
 }

@@ -575,4 +575,35 @@ public class StockHistoryRepository {
             long totalAbsoluteReservedDrift,
             int worstAbsoluteDrift) {
     }
+
+    /**
+     * Bin-condition breakdown for the supplied WIM IDs. Returns one row per
+     * (wim, condition) pair where condition is {@code blocked_type} normalized:
+     * NULL or empty string → {@code "OK"} (bin is healthy / not flagged), everything
+     * else passed through verbatim (e.g. {@code DAMAGED_CONDITION},
+     * {@code ITEM_NOT_FOUND}, {@code Expired}, {@code STORAGE_NOT_FOUND}, plus any
+     * operator-entered free-text). Used by {@code findReservationDriftHotspots} to
+     * answer "is this drift on healthy stock or on flagged bins?" without a per-WIM
+     * follow-up call.
+     */
+    public List<BinConditionRow> findBinConditionBreakdownByWimIds(Collection<Long> wimIds) {
+        if (wimIds == null || wimIds.isEmpty()) {
+            return List.of();
+        }
+        return inventory.sql("""
+                        SELECT wibm.warehouse_item_master AS wim_id,
+                               COALESCE(NULLIF(TRIM(wibm.blocked_type), ''), 'OK') AS condition,
+                               count(*)::bigint AS bin_count
+                          FROM warehouse_item_bin_master wibm
+                         WHERE wibm.warehouse_item_master IN (:wimIds)
+                         GROUP BY wibm.warehouse_item_master, condition
+                         ORDER BY wibm.warehouse_item_master, bin_count DESC, condition
+                        """)
+                .param("wimIds", wimIds)
+                .query(RecordRowMapper.of(BinConditionRow.class))
+                .list();
+    }
+
+    public record BinConditionRow(long wimId, String condition, long binCount) {
+    }
 }

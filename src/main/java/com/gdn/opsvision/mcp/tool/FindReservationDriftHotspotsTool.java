@@ -2,7 +2,9 @@ package com.gdn.opsvision.mcp.tool;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -12,6 +14,7 @@ import com.gdn.opsvision.mcp.dto.ReservationDriftHotspotsEvidence;
 import com.gdn.opsvision.mcp.dto.ReservationDriftHotspotsEvidence.DriftHotspot;
 import com.gdn.opsvision.mcp.dto.ReservationDriftHotspotsEvidence.DriftSummary;
 import com.gdn.opsvision.mcp.repository.StockHistoryRepository;
+import com.gdn.opsvision.mcp.repository.StockHistoryRepository.BinConditionRow;
 import com.gdn.opsvision.mcp.repository.StockHistoryRepository.DriftHotspotRow;
 import com.gdn.opsvision.mcp.repository.StockHistoryRepository.DriftSummaryRow;
 import com.gdn.opsvision.mcp.repository.WarehouseDefectMapRepository;
@@ -86,6 +89,14 @@ public class FindReservationDriftHotspotsTool {
             drifted WIMs at threshold, not just the capped hotspots list, so the \
             agent can gauge severity even when the list is truncated.
 
+            Each hotspot also carries a binConditionBreakdown map — counts of bins \
+            for the WIM grouped by warehouse_item_bin_master.blocked_type ('OK' for \
+            unflagged bins, otherwise the verbatim blocked_type string like \
+            'DAMAGED_CONDITION', 'ITEM_NOT_FOUND', 'Expired'). Counts sum to \
+            binCount. Use this to attribute drift: 'OK: 4' = drift is on healthy \
+            bins (likely an aggregate-vs-bins accounting leak); 'DAMAGED_CONDITION: \
+            3' = drift coincides with damaged inventory (different escalation).
+
             Returns FACTS, not VERDICTS — drift may be in-flight (legitimate \
             transient state from an open reservation) or systemic (real bug). \
             Drill into individual WIMs with findStockDiscrepancyOrigin / \
@@ -113,11 +124,20 @@ public class FindReservationDriftHotspotsTool {
         DriftSummaryRow summaryRow = stockHistoryRepo.findReservationDriftSummaryAtSite(
                 siteCode, since, effectiveMinDrift, supplierCode);
 
+        // Bin-condition breakdown: one batch query for all returned hotspots' WIM ids.
+        List<Long> wimIds = rows.stream().map(DriftHotspotRow::wimId).toList();
+        Map<Long, Map<String, Long>> conditionsByWim = new LinkedHashMap<>();
+        for (BinConditionRow bc : stockHistoryRepo.findBinConditionBreakdownByWimIds(wimIds)) {
+            conditionsByWim.computeIfAbsent(bc.wimId(), k -> new LinkedHashMap<>())
+                    .put(bc.condition(), bc.binCount());
+        }
+
         List<DriftHotspot> hotspots = new ArrayList<>(rows.size());
         for (DriftHotspotRow r : rows) {
             String physicalWarehouseCode = "RESTRICTED".equals(r.stockIndicator())
                     ? (defectCode != null ? defectCode : siteCode)
                     : siteCode;
+            Map<String, Long> breakdown = conditionsByWim.getOrDefault(r.wimId(), Map.of());
             hotspots.add(new DriftHotspot(
                     r.wimId(),
                     r.skuCode(),
@@ -135,6 +155,7 @@ public class FindReservationDriftHotspotsTool {
                     r.reservedDivergence(),
                     r.absoluteTotalDrift(),
                     r.binCount(),
+                    breakdown,
                     r.lastActivityAt()));
         }
 
