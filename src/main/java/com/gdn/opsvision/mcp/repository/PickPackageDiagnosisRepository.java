@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -65,19 +66,19 @@ public class PickPackageDiagnosisRepository {
                                po.awb_info,
                                po.good_issued_note,
                                po.claimed_by,
-                               po.claimed_date,
+                               po.claimed_date AT TIME ZONE 'UTC' AS claimed_date,
                                po.re_claimed_by,
-                               po.re_claimed_date,
+                               po.re_claimed_date AT TIME ZONE 'UTC' AS re_claimed_date,
                                po.work_zone_code,
-                               po.created_date,
-                               po.last_modified_date
+                               po.created_date AT TIME ZONE 'UTC' AS created_date,
+                               po.last_modified_date AT TIME ZONE 'UTC' AS last_modified_date
                           FROM packing_order po
                          WHERE po.pick_package = :ppId
                          ORDER BY po.active DESC, po.last_modified_date DESC, po.id DESC
                          LIMIT 1
                         """)
                 .param("ppId", ppId)
-                .query(PackingOrderRow.class)
+                .query(RecordRowMapper.of(PackingOrderRow.class))
                 .optional();
     }
 
@@ -96,14 +97,14 @@ public class PickPackageDiagnosisRepository {
                                pp.priority_boosted,
                                pp.picker              AS assigned_picker_id,
                                picker.code            AS assigned_picker_code,
-                               pp.assigned_picker_date,
+                               pp.assigned_picker_date AT TIME ZONE 'UTC' AS assigned_picker_date,
                                pp.distribution_zone_code,
                                pp.batch_id,
                                pp.batch_type,
                                pp.wave_number,
-                               pp.created_date,
-                               pp.updated_date,
-                               pp.auto_cancel_date,
+                               pp.created_date AT TIME ZONE 'UTC' AS created_date,
+                               pp.updated_date AT TIME ZONE 'UTC' AS updated_date,
+                               pp.auto_cancel_date AT TIME ZONE 'UTC' AS auto_cancel_date,
                                (SELECT DISTINCT w.code
                                   FROM sales_order so
                                   JOIN warehouse w ON w.id = so.warehouse
@@ -114,7 +115,7 @@ public class PickPackageDiagnosisRepository {
                          WHERE pp.id = :ppId
                         """)
                 .param("ppId", ppId)
-                .query(PpStateRow.class)
+                .query(RecordRowMapper.of(PpStateRow.class))
                 .optional();
     }
 
@@ -143,7 +144,7 @@ public class PickPackageDiagnosisRepository {
                 .param("ownId", ownPpId)
                 .param("batchId", hasBatch ? batchId : null)
                 .param("waveNo", hasWave ? waveNumber : null)
-                .query(BatchSiblingRow.class)
+                .query(RecordRowMapper.of(BatchSiblingRow.class))
                 .list();
     }
 
@@ -163,7 +164,7 @@ public class PickPackageDiagnosisRepository {
                          WHERE pp.id = :ppId
                         """)
                 .param("ppId", ppId)
-                .query(PpPriorityRow.class)
+                .query(RecordRowMapper.of(PpPriorityRow.class))
                 .optional();
     }
 
@@ -196,7 +197,7 @@ public class PickPackageDiagnosisRepository {
                          ORDER BY pl.id
                         """)
                 .param("ppId", ppId)
-                .query(PickListAllocationRow.class)
+                .query(RecordRowMapper.of(PickListAllocationRow.class))
                 .list();
     }
 
@@ -248,7 +249,7 @@ public class PickPackageDiagnosisRepository {
                            AND i.code IS NOT NULL
                         """)
                 .param("ppId", ppId)
-                .query(DemandRow.class)
+                .query(RecordRowMapper.of(DemandRow.class))
                 .list();
     }
 

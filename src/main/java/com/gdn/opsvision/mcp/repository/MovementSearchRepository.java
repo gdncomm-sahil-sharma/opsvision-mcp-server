@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -48,8 +49,8 @@ public class MovementSearchRepository {
                                pick_package_id,
                                status,
                                previous_status,
-                               created_date,
-                               last_modified_date,
+                               created_date AT TIME ZONE 'UTC' AS created_date,
+                               last_modified_date AT TIME ZONE 'UTC' AS last_modified_date,
                                last_modified_by,
                                automation,
                                source_area_code,
@@ -86,7 +87,7 @@ public class MovementSearchRepository {
                 .param("skuCode", blankToNull(skuCode))
                 .param("sourceAreaCode", blankToNull(sourceAreaCode))
                 .param("lim", limit)
-                .query(TaskRow.class)
+                .query(RecordRowMapper.of(TaskRow.class))
                 .list();
     }
 
@@ -106,8 +107,8 @@ public class MovementSearchRepository {
                                reference_id,
                                status,
                                previous_status,
-                               created_date,
-                               last_modified_date,
+                               created_date AT TIME ZONE 'UTC' AS created_date,
+                               last_modified_date AT TIME ZONE 'UTC' AS last_modified_date,
                                last_modified_by,
                                reference_type,
                                picking_type,
@@ -141,7 +142,7 @@ public class MovementSearchRepository {
                 .param("lastModifiedBy", blankToNull(lastModifiedBy))
                 .param("hasMsbfr", hasMultiSkuBatchFailedReason)
                 .param("lim", limit)
-                .query(RequestRow.class)
+                .query(RecordRowMapper.of(RequestRow.class))
                 .list();
     }
 

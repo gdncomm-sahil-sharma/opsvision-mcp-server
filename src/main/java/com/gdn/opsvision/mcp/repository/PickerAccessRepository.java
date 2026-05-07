@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -48,7 +49,7 @@ public class PickerAccessRepository {
             return List.of();
         }
         return stockholm.sql("""
-                        SELECT DISTINCT p.id, p.code, p.name, p.status, p.last_login_time
+                        SELECT DISTINCT p.id, p.code, p.name, p.status, p.last_login_time AT TIME ZONE 'UTC' AS last_login_time
                           FROM picker p
                           JOIN warehouse w  ON w.id = p.warehouse
                           JOIN picker_zone_group pzg ON pzg.picker_id = p.id
@@ -62,7 +63,7 @@ public class PickerAccessRepository {
                 .param("wh", warehouseCode)
                 .param("zoneIds", zoneIds)
                 .param("cap", MAX_PICKERS_PER_QUERY)
-                .query(PickerRow.class)
+                .query(RecordRowMapper.of(PickerRow.class))
                 .list();
     }
 
@@ -89,7 +90,7 @@ public class PickerAccessRepository {
                 .param("area", areaCode)
                 .param("wh", warehouseCode)
                 .param("cap", MAX_ZONES_PER_AREA + 1)
-                .query(ZoneRow.class)
+                .query(RecordRowMapper.of(ZoneRow.class))
                 .list();
     }
 
@@ -158,7 +159,9 @@ public class PickerAccessRepository {
                 .param("prec", precedenceCmp)
                 .param("pri", priorityCmp)
                 .param("sub", subLevelCmp)
-                .param("created", createdDate)
+                // pgjdbc 42.7.x rejects setObject(Instant); bind via OffsetDateTime in UTC
+                // (pl.created_date is timestamptz, so the explicit offset round-trips cleanly).
+                .param("created", createdDate.atOffset(java.time.ZoneOffset.UTC))
                 .query(Long.class)
                 .single();
         if (aheadCount == null) {
@@ -171,28 +174,28 @@ public class PickerAccessRepository {
     public Optional<PickerStateRow> findPickerByCode(String code) {
         return stockholm.sql("""
                         SELECT p.id, p.code, p.name, p.warehouse AS warehouse_id,
-                               w.code AS warehouse_code, p.status, p.last_login_time,
+                               w.code AS warehouse_code, p.status, p.last_login_time AT TIME ZONE 'UTC' AS last_login_time,
                                p.active, p.deleted, p.type
                           FROM picker p
                           LEFT JOIN warehouse w ON w.id = p.warehouse
                          WHERE p.code = :code
                         """)
                 .param("code", code)
-                .query(PickerStateRow.class)
+                .query(RecordRowMapper.of(PickerStateRow.class))
                 .optional();
     }
 
     public Optional<PickerStateRow> findPickerById(long id) {
         return stockholm.sql("""
                         SELECT p.id, p.code, p.name, p.warehouse AS warehouse_id,
-                               w.code AS warehouse_code, p.status, p.last_login_time,
+                               w.code AS warehouse_code, p.status, p.last_login_time AT TIME ZONE 'UTC' AS last_login_time,
                                p.active, p.deleted, p.type
                           FROM picker p
                           LEFT JOIN warehouse w ON w.id = p.warehouse
                          WHERE p.id = :id
                         """)
                 .param("id", id)
-                .query(PickerStateRow.class)
+                .query(RecordRowMapper.of(PickerStateRow.class))
                 .optional();
     }
 
@@ -207,7 +210,7 @@ public class PickerAccessRepository {
                          ORDER BY zg.id
                         """)
                 .param("pickerId", pickerId)
-                .query(ZoneGroupRow.class)
+                .query(RecordRowMapper.of(ZoneGroupRow.class))
                 .list();
     }
 
@@ -224,7 +227,7 @@ public class PickerAccessRepository {
                         """)
                 .param("zgId", zoneGroupId)
                 .param("lim", limit)
-                .query(ZoneRow.class)
+                .query(RecordRowMapper.of(ZoneRow.class))
                 .list();
     }
 
@@ -281,7 +284,7 @@ public class PickerAccessRepository {
                         """)
                 .param("zoneIds", zoneIds)
                 .param("lim", limit)
-                .query(OpenPickListRow.class)
+                .query(RecordRowMapper.of(OpenPickListRow.class))
                 .list();
     }
 
@@ -303,7 +306,7 @@ public class PickerAccessRepository {
                          ORDER BY z.id
                         """)
                 .param("zoneIds", zoneIds)
-                .query(ZoneActivityRow.class)
+                .query(RecordRowMapper.of(ZoneActivityRow.class))
                 .list();
     }
 
@@ -317,7 +320,7 @@ public class PickerAccessRepository {
             return List.of();
         }
         return stockholm.sql("""
-                        SELECT DISTINCT p.id, p.code, p.name, p.status, p.last_login_time
+                        SELECT DISTINCT p.id, p.code, p.name, p.status, p.last_login_time AT TIME ZONE 'UTC' AS last_login_time
                           FROM picker p
                           JOIN picker_zone_group pzg ON pzg.picker_id = p.id
                          WHERE pzg.zone_group_id IN (:zoneGroupIds)
@@ -329,7 +332,7 @@ public class PickerAccessRepository {
                 .param("zoneGroupIds", zoneGroupIds)
                 .param("excludeId", excludePickerId)
                 .param("cap", MAX_PICKERS_PER_QUERY)
-                .query(PickerRow.class)
+                .query(RecordRowMapper.of(PickerRow.class))
                 .list();
     }
 

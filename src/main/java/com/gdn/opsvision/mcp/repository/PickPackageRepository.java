@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,9 +24,14 @@ public class PickPackageRepository {
         this.stockholm = stockholm;
     }
 
+    // pick_package timestamps are `timestamp without time zone`; Hibernate writes UTC into them.
+    // Cast to timestamptz so pgjdbc can read into Instant (it rejects Instant from tz-less columns).
     private static final String HEADER_SELECT = """
             SELECT id, code, status, picking_status, canceled, short_pick, in_progress,
-                   created_date, updated_date, auto_cancel_date, first_export_xls_time,
+                   created_date AT TIME ZONE 'UTC' AS created_date,
+                   updated_date AT TIME ZONE 'UTC' AS updated_date,
+                   auto_cancel_date AT TIME ZONE 'UTC' AS auto_cancel_date,
+                   first_export_xls_time AT TIME ZONE 'UTC' AS first_export_xls_time,
                    batch_id, wave_number, business_channel, channel, client_code,
                    picking_type, packing_spec_code, target_area_code, target_section_code,
                    partial_fulfillment_allowed, manual_target_area
@@ -54,13 +60,14 @@ public class PickPackageRepository {
                                transit_drop_point_code, transit_drop_point_area,
                                automation, ptl_consolidation_status, consolidation_required,
                                selected_for_packing, handling_unit_group,
-                               last_modified_by, last_modified_date
+                               last_modified_by,
+                               last_modified_date AT TIME ZONE 'UTC' AS last_modified_date
                         FROM pick_package_handling_units
                         WHERE pick_package = :pp
                         ORDER BY id
                         """)
                 .param("pp", pickPackageId)
-                .query(HandlingUnitRow.class)
+                .query(RecordRowMapper.of(HandlingUnitRow.class))
                 .list();
         List<PickPackageEvidence.HandlingUnit> out = new java.util.ArrayList<>(raws.size());
         for (HandlingUnitRow r : raws) {
@@ -119,7 +126,7 @@ public class PickPackageRepository {
                         SELECT id, code FROM pick_package WHERE id IN (:ids)
                         """)
                 .param("ids", ids)
-                .query(IdCode.class)
+                .query(RecordRowMapper.of(IdCode.class))
                 .list();
         Map<Long, String> out = new LinkedHashMap<>(rows.size());
         for (IdCode r : rows) {

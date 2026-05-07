@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -95,12 +96,13 @@ public class StuckRulesRepository {
     private Optional<PpFacts> findPpFacts(long ppId) {
         return stockholm.sql("""
                         SELECT status, canceled, short_pick, picking_status,
-                               first_export_xls_time, wave_number, batch_id
+                               first_export_xls_time AT TIME ZONE 'UTC' AS first_export_xls_time,
+                               wave_number, batch_id
                         FROM pick_package
                         WHERE id = :pp
                         """)
                 .param("pp", ppId)
-                .query(PpFacts.class)
+                .query(RecordRowMapper.of(PpFacts.class))
                 .optional();
     }
 
@@ -113,7 +115,7 @@ public class StuckRulesRepository {
                         WHERE pick_package_id = :pp
                         """)
                 .param("pp", ppId)
-                .query(SoFacts.class)
+                .query(RecordRowMapper.of(SoFacts.class))
                 .single();
     }
 
@@ -206,7 +208,7 @@ public class StuckRulesRepository {
                         ORDER BY pld.id
                         """)
                 .param("pp", ppId)
-                .query(ActivePld.class)
+                .query(RecordRowMapper.of(ActivePld.class))
                 .list();
         List<Long> pickListIds = rows.stream()
                 .map(ActivePld::pickListId).filter(java.util.Objects::nonNull).distinct().toList();
@@ -230,7 +232,7 @@ public class StuckRulesRepository {
                         ORDER BY id
                         """)
                 .param("pp", ppId)
-                .query(OpenRow.class)
+                .query(RecordRowMapper.of(OpenRow.class))
                 .list();
         return new RuleEvaluation(
                 "no-open-task-requests",
@@ -249,7 +251,7 @@ public class StuckRulesRepository {
                         ORDER BY id
                         """)
                 .param("pp", ppId)
-                .query(OpenRow.class)
+                .query(RecordRowMapper.of(OpenRow.class))
                 .list();
         return new RuleEvaluation(
                 "no-non-closed-tasks",
@@ -299,7 +301,7 @@ public class StuckRulesRepository {
                         WHERE sales_order IN (SELECT id FROM sales_order WHERE pick_package_id = :pp)
                         """)
                 .param("pp", ppId)
-                .query(PicksRemainingFacts.class)
+                .query(RecordRowMapper.of(PicksRemainingFacts.class))
                 .single();
         return new RuleEvaluation(
                 "picks-remaining",

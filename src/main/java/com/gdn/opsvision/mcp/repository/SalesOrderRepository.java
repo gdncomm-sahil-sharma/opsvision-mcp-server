@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -35,7 +36,7 @@ public class SalesOrderRepository {
                                so.last_status,
                                so.picking_stuck,
                                so.order_stuck_reason,
-                               so.last_process_date,
+                               so.last_process_date AT TIME ZONE 'UTC' AS last_process_date,
                                so.pick_package_id,
                                pp.code            AS pp_code,
                                w.code             AS site_code
@@ -45,7 +46,7 @@ public class SalesOrderRepository {
                          WHERE so.order_item_id = :orderItemId
                         """)
                 .param("orderItemId", orderItemId)
-                .query(SalesOrderHeader.class)
+                .query(RecordRowMapper.of(SalesOrderHeader.class))
                 .optional();
     }
 
@@ -64,7 +65,7 @@ public class SalesOrderRepository {
                          ORDER BY pi.id
                         """)
                 .param("soId", soId)
-                .query(PickingItemRow.class)
+                .query(RecordRowMapper.of(PickingItemRow.class))
                 .list();
     }
 

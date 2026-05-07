@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.time.Instant;
 import java.util.List;
 
@@ -30,8 +31,8 @@ public class MovementRepository {
                         SELECT id,
                                status,
                                previous_status,
-                               created_date,
-                               last_modified_date,
+                               created_date AT TIME ZONE 'UTC' AS created_date,
+                               last_modified_date AT TIME ZONE 'UTC' AS last_modified_date,
                                last_modified_by,
                                reference_type,
                                target_area_code,
@@ -43,7 +44,7 @@ public class MovementRepository {
                         ORDER BY created_date, id
                         """)
                 .param("pp", ppId)
-                .query(TaskRequestRow.class)
+                .query(RecordRowMapper.of(TaskRequestRow.class))
                 .list();
     }
 
@@ -52,8 +53,8 @@ public class MovementRepository {
                         SELECT id,
                                status,
                                previous_status,
-                               created_date,
-                               last_modified_date,
+                               created_date AT TIME ZONE 'UTC' AS created_date,
+                               last_modified_date AT TIME ZONE 'UTC' AS last_modified_date,
                                last_modified_by,
                                picking_task_request_detail,
                                picking_task_list,
@@ -71,7 +72,7 @@ public class MovementRepository {
                         ORDER BY created_date, id
                         """)
                 .param("pp", ppId)
-                .query(TaskRow.class)
+                .query(RecordRowMapper.of(TaskRow.class))
                 .list();
     }
 

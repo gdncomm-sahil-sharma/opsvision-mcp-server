@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -38,7 +39,7 @@ public class StockHistoryRepository {
     public List<MutationRow> findByTrace(String traceId) {
         return inventory.sql("""
                         SELECT id,
-                               created_date,
+                               created_date AT TIME ZONE 'UTC' AS created_date,
                                created_by,
                                warehouse_item_master,
                                bin_code,
@@ -59,7 +60,7 @@ public class StockHistoryRepository {
                         """)
                 .param("trace", traceId)
                 .param("cap", MAX_EVENTS + 1)
-                .query(MutationRow.class)
+                .query(RecordRowMapper.of(MutationRow.class))
                 .list();
     }
 
@@ -104,7 +105,7 @@ public class StockHistoryRepository {
                         GROUP BY stock_trace_id
                         """)
                 .param("traceIds", traceIds)
-                .query(TraceCount.class)
+                .query(RecordRowMapper.of(TraceCount.class))
                 .list();
         Map<String, Long> out = new LinkedHashMap<>(rows.size());
         for (TraceCount r : rows) {
@@ -143,7 +144,7 @@ public class StockHistoryRepository {
                 .param("wimId", wimId)
                 .param("since", since)
                 .param("until", until)
-                .query(ActionGroupRow.class)
+                .query(RecordRowMapper.of(ActionGroupRow.class))
                 .list();
     }
 
@@ -185,7 +186,7 @@ public class StockHistoryRepository {
     public List<DecrementEventRow> findRecentDecrementsForWim(
             long wimId, LocalDateTime since, LocalDateTime until, int limit) {
         return inventory.sql("""
-                        SELECT created_date,
+                        SELECT created_date AT TIME ZONE 'UTC' AS created_date,
                                process_type,
                                stock_action_type,
                                transaction_quantity,
@@ -207,7 +208,7 @@ public class StockHistoryRepository {
                 .param("since", since)
                 .param("until", until)
                 .param("lim", limit)
-                .query(DecrementEventRow.class)
+                .query(RecordRowMapper.of(DecrementEventRow.class))
                 .list();
     }
 

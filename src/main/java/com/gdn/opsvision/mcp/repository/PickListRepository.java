@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,7 +31,7 @@ public class PickListRepository {
                         WHERE id = :id
                         """)
                 .param("id", pickListId)
-                .query(HeaderRow.class)
+                .query(RecordRowMapper.of(HeaderRow.class))
                 .optional();
         return raw.map(r -> new PickListEvidence.Header(
                 r.id(), r.name(), r.warehouseId(), r.pickerId(), r.status(),
