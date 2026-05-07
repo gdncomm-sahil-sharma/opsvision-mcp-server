@@ -94,7 +94,15 @@ public record PickPackageDiagnosisEvidence(
             Integer pickingPriorityPrecedence) {
     }
 
-    /** Section 3 — per-pick_list allocation, eligible-picker count, queue rank. */
+    /**
+     * Section 3 — per-pick_list allocation, eligible-picker count, queue rank.
+     *
+     * <p>{@code eligiblePickerFreshness} buckets the OFFLINE eligible pickers by
+     * {@code last_login_time} so the agent can tell "stale pool, no one coming back"
+     * from "everyone just stepped away, will return soon". {@code recentlyOnlinePickers}
+     * is a small sample (≤5) of the most-recently-seen OFFLINE pickers — concrete names
+     * the agent can quote when explaining a picker-availability bottleneck.
+     */
     public record PickListAllocation(
             long pickListId,
             String pickListStatus,
@@ -112,6 +120,8 @@ public record PickPackageDiagnosisEvidence(
             List<String> sourceAreaCodes,
             int eligiblePickerCount,
             PickerStatusBreakdown eligiblePickerStatus,
+            PickerStatusFreshness eligiblePickerFreshness,
+            List<PickerSnapshot> recentlyOnlinePickers,
             Integer queueRankAmongOpen,
             Integer openPickListsInZone) {
     }
@@ -123,7 +133,9 @@ public record PickPackageDiagnosisEvidence(
             List<String> resolvedZoneCodes,
             boolean resolvedZonesTruncated,
             int eligiblePickerCount,
-            PickerStatusBreakdown eligiblePickerStatus) {
+            PickerStatusBreakdown eligiblePickerStatus,
+            PickerStatusFreshness eligiblePickerFreshness,
+            List<PickerSnapshot> recentlyOnlinePickers) {
     }
 
     /** Section 5 — replenishment / SNA. Storage check + per-SKU deficit. */
@@ -281,5 +293,34 @@ public record PickPackageDiagnosisEvidence(
             int breakRejectPicklist,
             int occupied,
             int other) {
+    }
+
+    /**
+     * OFFLINE-eligible-picker freshness, bucketed by {@code now − last_login_time}. Lets
+     * the agent estimate near-term recovery: fresh buckets imply pickers on a break or
+     * brief log-out who'll likely return soon; older buckets imply a stale pool.
+     *
+     * <p>Buckets are non-overlapping and sum to the OFFLINE count in
+     * {@link PickerStatusBreakdown#offline()}. Pickers with no recorded
+     * {@code last_login_time} fall into {@code unknown}.
+     */
+    public record PickerStatusFreshness(
+            int offlineWithin15Min,
+            int offlineWithin1Hr,
+            int offlineWithin1Day,
+            int offlineOlder,
+            int offlineUnknown) {
+    }
+
+    /**
+     * One picker entry for the {@code recentlyOnlinePickers} sample. Pre-computed
+     * {@code minutesSinceLastLogin} saves the agent a clock-arithmetic step when
+     * generating prose.
+     */
+    public record PickerSnapshot(
+            String pickerCode,
+            String status,
+            Instant lastLoginTime,
+            Long minutesSinceLastLogin) {
     }
 }

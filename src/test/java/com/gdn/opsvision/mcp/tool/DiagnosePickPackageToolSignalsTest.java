@@ -385,6 +385,8 @@ class DiagnosePickPackageToolSignalsTest {
                 new PickerStatusBreakdown(
                         available,
                         Math.max(0, eligibleCount - available), 0, 0, 0, 0, 0),
+                /*eligiblePickerFreshness*/ emptyFreshness(),
+                /*recentlyOnlinePickers*/ List.of(),
                 /*queueRankAmongOpen*/ 1, /*openPickListsInZone*/ 1);
     }
 
@@ -396,7 +398,14 @@ class DiagnosePickPackageToolSignalsTest {
                 0L, 1L, 0, 0L, Instant.now(),
                 List.of("M4-STOR"),
                 100, new PickerStatusBreakdown(5, 50, 45, 0, 0, 0, 0),
+                emptyFreshness(), List.of(),
                 null, null);
+    }
+
+    private static com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusFreshness
+            emptyFreshness() {
+        return new com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusFreshness(
+                0, 0, 0, 0, 0);
     }
 
     private static BatchConsolidation batchAbsent() {

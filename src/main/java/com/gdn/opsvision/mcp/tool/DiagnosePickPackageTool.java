@@ -25,7 +25,9 @@ import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PackingOrderInfo;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickListAllocation;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickPackagePriority;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickPackageState;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerSnapshot;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusBreakdown;
+import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.PickerStatusFreshness;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.ReplenishmentSignal;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.SourceAreaCoverage;
 import com.gdn.opsvision.mcp.dto.PickPackageDiagnosisEvidence.StatusInterpretation;
@@ -313,6 +315,8 @@ public class DiagnosePickPackageTool {
                     sourceAreaCodes,
                     info.count,
                     info.breakdown,
+                    info.freshness,
+                    info.recentlyOnlinePickers,
                     rank,
                     openInZone));
         }
@@ -337,7 +341,9 @@ public class DiagnosePickPackageTool {
                     zoneCodes,
                     truncated,
                     info.count,
-                    info.breakdown));
+                    info.breakdown,
+                    info.freshness,
+                    info.recentlyOnlinePickers));
         }
 
         // §5 replenishment / SNA — per-SKU deficit
@@ -520,7 +526,12 @@ public class DiagnosePickPackageTool {
 
     private EligiblePickerInfo computeEligibleForZones(List<Long> zoneIds, String siteCode) {
         List<PickerRow> pickers = pickerAccessRepo.findEligiblePickersForZones(zoneIds, siteCode);
-        return new EligiblePickerInfo(pickers.size(), breakdown(pickers));
+        java.time.Instant now = java.time.Instant.now();
+        return new EligiblePickerInfo(
+                pickers.size(),
+                breakdown(pickers),
+                freshness(pickers, now),
+                recentlyOnlineSample(pickers, now));
     }
 
     private static PickerStatusBreakdown breakdown(List<PickerRow> pickers) {
@@ -540,9 +551,70 @@ public class DiagnosePickPackageTool {
         return new PickerStatusBreakdown(avail, busy, off, brkInit, brkRej, occ, other);
     }
 
-    private record EligiblePickerInfo(int count, PickerStatusBreakdown breakdown) {
+    /**
+     * Bucket OFFLINE pickers by how recently they were last seen. Bucket boundaries
+     * (15 min, 1 hr, 1 day) are operational rules of thumb for "still on a break",
+     * "still on shift", "same workday".
+     */
+    static PickerStatusFreshness freshness(List<PickerRow> pickers, java.time.Instant now) {
+        int w15 = 0, w1h = 0, w1d = 0, older = 0, unknown = 0;
+        for (PickerRow p : pickers) {
+            if (!"OFFLINE".equals(p.status())) {
+                continue;
+            }
+            java.time.Instant t = p.lastLoginTime();
+            if (t == null) {
+                unknown++;
+                continue;
+            }
+            long sec = java.time.Duration.between(t, now).getSeconds();
+            if (sec < 0) {
+                // future timestamp — treat as fresh-ish but not within-15
+                w1h++;
+            } else if (sec <= 15 * 60) {
+                w15++;
+            } else if (sec <= 60 * 60) {
+                w1h++;
+            } else if (sec <= 24 * 60 * 60) {
+                w1d++;
+            } else {
+                older++;
+            }
+        }
+        return new PickerStatusFreshness(w15, w1h, w1d, older, unknown);
+    }
+
+    /**
+     * Top-N OFFLINE pickers by {@code last_login_time} DESC. The agent quotes these
+     * specific names when explaining a "no available picker" bottleneck — concrete
+     * actionable detail rather than a bare counter.
+     */
+    static List<PickerSnapshot> recentlyOnlineSample(List<PickerRow> pickers, java.time.Instant now) {
+        return pickers.stream()
+                .filter(p -> "OFFLINE".equals(p.status()) && p.lastLoginTime() != null)
+                .sorted((a, b) -> b.lastLoginTime().compareTo(a.lastLoginTime()))
+                .limit(RECENTLY_ONLINE_SAMPLE_SIZE)
+                .map(p -> new PickerSnapshot(
+                        p.code(),
+                        p.status(),
+                        p.lastLoginTime(),
+                        java.time.Duration.between(p.lastLoginTime(), now).toMinutes()))
+                .toList();
+    }
+
+    private static final int RECENTLY_ONLINE_SAMPLE_SIZE = 5;
+
+    private record EligiblePickerInfo(
+            int count,
+            PickerStatusBreakdown breakdown,
+            PickerStatusFreshness freshness,
+            List<PickerSnapshot> recentlyOnlinePickers) {
         static EligiblePickerInfo empty() {
-            return new EligiblePickerInfo(0, new PickerStatusBreakdown(0, 0, 0, 0, 0, 0, 0));
+            return new EligiblePickerInfo(
+                    0,
+                    new PickerStatusBreakdown(0, 0, 0, 0, 0, 0, 0),
+                    new PickerStatusFreshness(0, 0, 0, 0, 0),
+                    List.of());
         }
     }
 
