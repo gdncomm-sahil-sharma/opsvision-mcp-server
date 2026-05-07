@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,7 +28,7 @@ import com.gdn.opsvision.mcp.dto.InventoryReservationReconciliation.StockholmDem
  *       {@code warehouse_item → item} so each row carries its SKU code, required qty,
  *       picked qty, and the picking_item / sales_order id (stockholm).</li>
  *   <li>Groups picking_items by SKU and, per SKU, calls
- *       {@link InventoryRepository#findStockForItem(String, String)} to fetch the
+ *       {@link InventoryRepository#findStockForItem(String, String, String)} to fetch the
  *       inventory-DB state. Per-SKU divergences are computed in Java.</li>
  * </ol>
  *
@@ -40,12 +41,15 @@ public class ReconciliationRepository {
 
     private final JdbcClient stockholm;
     private final InventoryRepository inventoryRepo;
+    private final WarehouseDefectMapRepository defectMapRepo;
 
     public ReconciliationRepository(
             @Qualifier("stockholmJdbcClient") JdbcClient stockholm,
-            InventoryRepository inventoryRepo) {
+            InventoryRepository inventoryRepo,
+            WarehouseDefectMapRepository defectMapRepo) {
         this.stockholm = stockholm;
         this.inventoryRepo = inventoryRepo;
+        this.defectMapRepo = defectMapRepo;
     }
 
     /** Resolve siteCode from PP via the SO's warehouse FK. Returns empty if PP has no SOs. */
@@ -78,7 +82,7 @@ public class ReconciliationRepository {
                         ORDER BY pi.id
                         """)
                 .param("pp", ppId)
-                .query(DemandRow.class)
+                .query(RecordRowMapper.of(DemandRow.class))
                 .list();
 
         Map<String, List<DemandRow>> bySku = new LinkedHashMap<>();
@@ -87,6 +91,8 @@ public class ReconciliationRepository {
             bySku.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
         }
 
+        // Defect sibling is stable per site; resolve once and reuse across SKUs.
+        String restrictedSibling = defectMapRepo.defectCodeFor(siteCode).orElse(null);
         List<ItemReconciliation> out = new ArrayList<>(bySku.size());
         for (Map.Entry<String, List<DemandRow>> e : bySku.entrySet()) {
             String sku = e.getKey();
@@ -105,7 +111,7 @@ public class ReconciliationRepository {
 
             List<WarehouseItemMaster> inventory = sku.isEmpty()
                     ? List.of()
-                    : inventoryRepo.findStockForItem(sku, siteCode);
+                    : inventoryRepo.findStockForItem(sku, siteCode, restrictedSibling);
 
             int unrestrictedAvailable = inventory.stream()
                     .filter(w -> "UNRESTRICTED".equalsIgnoreCase(w.stockIndicator()))

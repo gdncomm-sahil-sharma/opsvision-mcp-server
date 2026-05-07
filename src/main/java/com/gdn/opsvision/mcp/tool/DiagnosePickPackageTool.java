@@ -44,6 +44,7 @@ import com.gdn.opsvision.mcp.repository.PickPackageDiagnosisRepository.PpStateRo
 import com.gdn.opsvision.mcp.repository.PickerAccessRepository;
 import com.gdn.opsvision.mcp.repository.PickerAccessRepository.PickerRow;
 import com.gdn.opsvision.mcp.repository.PickerAccessRepository.ZoneRow;
+import com.gdn.opsvision.mcp.repository.WarehouseDefectMapRepository;
 
 /**
  * Composite tool answering "why isn't this pick package being picked / progressing?". Reads
@@ -189,16 +190,19 @@ public class DiagnosePickPackageTool {
     private final PickerAccessRepository pickerAccessRepo;
     private final InventoryRepository inventoryRepo;
     private final MovementRepository movementRepo;
+    private final WarehouseDefectMapRepository defectMapRepo;
 
     public DiagnosePickPackageTool(
             PickPackageDiagnosisRepository diagnosisRepo,
             PickerAccessRepository pickerAccessRepo,
             InventoryRepository inventoryRepo,
-            MovementRepository movementRepo) {
+            MovementRepository movementRepo,
+            WarehouseDefectMapRepository defectMapRepo) {
         this.diagnosisRepo = diagnosisRepo;
         this.pickerAccessRepo = pickerAccessRepo;
         this.inventoryRepo = inventoryRepo;
         this.movementRepo = movementRepo;
+        this.defectMapRepo = defectMapRepo;
     }
 
     @Tool(description = """
@@ -555,11 +559,15 @@ public class DiagnosePickPackageTool {
         for (DemandRow d : demand) {
             demandBySku.merge(d.skuCode(), d.remainingDemand(), Integer::sum);
         }
+        // Defect-warehouse sibling code is stable per site for the lifetime of this PP query.
+        // Resolve once, reuse across SKUs.
+        String restrictedSibling = defectMapRepo.defectCodeFor(s.siteCode()).orElse(null);
         List<DemandShortage> shortages = new ArrayList<>(demandBySku.size());
         for (Map.Entry<String, Integer> e : demandBySku.entrySet()) {
             String sku = e.getKey();
             int remaining = e.getValue();
-            List<WarehouseItemMaster> wims = inventoryRepo.findStockForItem(sku, s.siteCode());
+            List<WarehouseItemMaster> wims = inventoryRepo.findStockForItem(
+                    sku, s.siteCode(), restrictedSibling);
             Integer unrestrictedAvail = wims.isEmpty() ? null : wims.stream()
                     .filter(w -> "UNRESTRICTED".equalsIgnoreCase(w.stockIndicator()))
                     .mapToInt(w -> w.aggregateAvailableQty() == null ? 0 : w.aggregateAvailableQty())

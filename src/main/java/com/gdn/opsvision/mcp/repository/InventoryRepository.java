@@ -1,5 +1,6 @@
 package com.gdn.opsvision.mcp.repository;
 
+import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,8 +41,15 @@ public class InventoryRepository {
     /**
      * Fetch all WIM rows + aggregate quantities + capped bin breakdown for a SKU at a site.
      * Returns an empty list if the SKU isn't onboarded at the site (no WIM row).
+     *
+     * @param restrictedSiblingCode the defect-warehouse code paired with {@code siteCode}
+     *        (per stockholm's {@code warehouse_defect_map}), used to populate
+     *        {@code physicalWarehouseCode} on RESTRICTED rows. May be {@code null} if no
+     *        defect pairing is configured for the site — RESTRICTED rows in that case
+     *        fall back to {@code siteCode} (unexpected but surfaced rather than dropped).
      */
-    public List<WarehouseItemMaster> findStockForItem(String skuCode, String siteCode) {
+    public List<WarehouseItemMaster> findStockForItem(String skuCode, String siteCode,
+            String restrictedSiblingCode) {
         List<WimRollup> rollups = inventory.sql("""
                         SELECT wim.id AS wim_id,
                                wim.stock_indicator,
@@ -58,7 +66,7 @@ public class InventoryRepository {
                         """)
                 .param("site", siteCode)
                 .param("sku", skuCode)
-                .query(WimRollup.class)
+                .query(RecordRowMapper.of(WimRollup.class))
                 .list();
 
         if (rollups.isEmpty()) {
@@ -84,9 +92,12 @@ public class InventoryRepository {
             Integer aggResv = r.aggregateReservedQty();
             Integer aggAvailable = aggOrig == null ? null
                     : aggOrig - (aggResv == null ? 0 : aggResv);
+            String physicalWarehouseCode = resolvePhysicalWarehouseCode(
+                    siteCode, r.stockIndicator(), restrictedSiblingCode);
             out.add(new WarehouseItemMaster(
                     r.wimId(),
                     r.stockIndicator(),
+                    physicalWarehouseCode,
                     r.stockType(),
                     aggOrig,
                     aggResv,
@@ -98,6 +109,20 @@ public class InventoryRepository {
                     bins));
         }
         return out;
+    }
+
+    /**
+     * Stock physically lives at: the {@code siteCode} itself for UNRESTRICTED rows; the
+     * paired defect warehouse for RESTRICTED rows. Falls back to {@code siteCode} if a
+     * RESTRICTED row exists but no defect mapping was provided — caller has no better
+     * answer to give and dropping the field would be worse.
+     */
+    private static String resolvePhysicalWarehouseCode(String siteCode, String stockIndicator,
+            String restrictedSiblingCode) {
+        if ("RESTRICTED".equals(stockIndicator)) {
+            return restrictedSiblingCode != null ? restrictedSiblingCode : siteCode;
+        }
+        return siteCode;
     }
 
     private static int sumNullable(List<BinRow> rows,
@@ -131,7 +156,7 @@ public class InventoryRepository {
                         """)
                 .param("site", siteCode)
                 .param("sku", skuCode)
-                .query(WimRef.class)
+                .query(RecordRowMapper.of(WimRef.class))
                 .list();
     }
 
@@ -157,7 +182,7 @@ public class InventoryRepository {
                         ORDER BY wibm.warehouse_item_master, wibm.id
                         """)
                 .param("wimIds", wimIds)
-                .query(BinRow.class)
+                .query(RecordRowMapper.of(BinRow.class))
                 .list();
         Map<Long, List<BinRow>> byWim = new LinkedHashMap<>();
         for (BinRow r : rows) {
