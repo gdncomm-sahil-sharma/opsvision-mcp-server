@@ -372,4 +372,175 @@ public class StockHistoryRepository {
             Integer reservedDivergence,
             int binCount) {
     }
+
+    // ─── findReservationDriftHotspots: site-wide aggregate-vs-bins scan ──────────
+
+    /**
+     * Site-wide scan for every {@code warehouse_item_master} where the WIM-aggregate
+     * quantity disagrees with the sum of per-bin quantities on either ORIGINAL or
+     * RESERVED stock. Returns rows with {@code absoluteTotalDrift >= minDrift}, ordered
+     * by {@code absoluteTotalDrift DESC} so the worst offenders lead. Caller passes
+     * {@code limit + 1} to detect truncation.
+     *
+     * <p>When {@code since} is non-null, an additional filter restricts results to WIMs
+     * with at least one {@code stock_history} row at or after that timestamp, and the
+     * returned {@code lastActivityAt} reflects the windowed maximum. When {@code since}
+     * is null, the activity join still returns lifetime-most-recent activity but does
+     * not filter (so legacy-drifted WIMs with no recent activity are surfaced too).
+     */
+    public List<DriftHotspotRow> findReservationDriftHotspotsAtSite(
+            String siteCode, LocalDateTime since, int minDrift, int limit) {
+        return inventory.sql("""
+                        WITH site_wims AS (
+                          SELECT wim.id              AS wim_id,
+                                 wim.stock_indicator AS stock_indicator,
+                                 i.code              AS sku_code
+                            FROM warehouse_item_master wim
+                            JOIN warehouse w ON w.id = wim.warehouse
+                            JOIN item      i ON i.id = wim.item
+                           WHERE w.code = :site
+                        ),
+                        bin_sums AS (
+                          SELECT wibm.warehouse_item_master                AS wim_id,
+                                 sum(COALESCE(bos.quantity, 0))::int       AS bin_sum_original_qty,
+                                 sum(COALESCE(brs.quantity, 0))::int       AS bin_sum_reserved_qty,
+                                 count(*)::int                             AS bin_count
+                            FROM warehouse_item_bin_master wibm
+                            JOIN site_wims sw ON sw.wim_id = wibm.warehouse_item_master
+                            LEFT JOIN warehouse_bin_physical_original_stock bos ON bos.warehouse_item_bin_master = wibm.id
+                            LEFT JOIN warehouse_bin_physical_reserved_stock  brs ON brs.warehouse_item_bin_master = wibm.id
+                           GROUP BY wibm.warehouse_item_master
+                        ),
+                        last_activity AS (
+                          SELECT sh.warehouse_item_master,
+                                 max(sh.created_date) AS last_at
+                            FROM stock_history sh
+                            JOIN site_wims sw ON sw.wim_id = sh.warehouse_item_master
+                           WHERE (CAST(:since AS timestamp) IS NULL OR sh.created_date >= :since)
+                           GROUP BY sh.warehouse_item_master
+                        )
+                        SELECT sw.wim_id,
+                               sw.sku_code,
+                               sw.stock_indicator,
+                               COALESCE(pos.quantity, 0)::int                              AS aggregate_original_qty,
+                               COALESCE(bs.bin_sum_original_qty, 0)::int                   AS bin_sum_original_qty,
+                               (COALESCE(pos.quantity, 0)
+                                  - COALESCE(bs.bin_sum_original_qty, 0))::int             AS original_divergence,
+                               COALESCE(prs.quantity, 0)::int                              AS aggregate_reserved_qty,
+                               COALESCE(bs.bin_sum_reserved_qty, 0)::int                   AS bin_sum_reserved_qty,
+                               (COALESCE(prs.quantity, 0)
+                                  - COALESCE(bs.bin_sum_reserved_qty, 0))::int             AS reserved_divergence,
+                               (abs(COALESCE(pos.quantity, 0)
+                                      - COALESCE(bs.bin_sum_original_qty, 0))
+                                + abs(COALESCE(prs.quantity, 0)
+                                      - COALESCE(bs.bin_sum_reserved_qty, 0)))::int        AS absolute_total_drift,
+                               COALESCE(bs.bin_count, 0)::int                              AS bin_count,
+                               (la.last_at AT TIME ZONE 'UTC')                             AS last_activity_at
+                          FROM site_wims sw
+                          LEFT JOIN warehouse_physical_original_stock pos ON pos.warehouse_item_master = sw.wim_id
+                          LEFT JOIN warehouse_physical_reserved_stock  prs ON prs.warehouse_item_master = sw.wim_id
+                          LEFT JOIN bin_sums       bs ON bs.wim_id = sw.wim_id
+                          LEFT JOIN last_activity  la ON la.warehouse_item_master = sw.wim_id
+                         WHERE (CAST(:since AS timestamp) IS NULL OR la.last_at IS NOT NULL)
+                           AND (abs(COALESCE(pos.quantity, 0)
+                                      - COALESCE(bs.bin_sum_original_qty, 0))
+                                + abs(COALESCE(prs.quantity, 0)
+                                      - COALESCE(bs.bin_sum_reserved_qty, 0))) >= :minDrift
+                         ORDER BY absolute_total_drift DESC, sw.wim_id
+                         LIMIT :lim
+                        """)
+                .param("site", siteCode)
+                .param("since", since)
+                .param("minDrift", minDrift)
+                .param("lim", limit)
+                .query(RecordRowMapper.of(DriftHotspotRow.class))
+                .list();
+    }
+
+    /**
+     * Site-wide aggregate stats across all drifted WIMs at or above {@code minDrift}.
+     * Use alongside {@link #findReservationDriftHotspotsAtSite} to surface the total
+     * scope of drift even when the hotspots list is capped.
+     */
+    public DriftSummaryRow findReservationDriftSummaryAtSite(
+            String siteCode, LocalDateTime since, int minDrift) {
+        return inventory.sql("""
+                        WITH site_wims AS (
+                          SELECT wim.id AS wim_id
+                            FROM warehouse_item_master wim
+                            JOIN warehouse w ON w.id = wim.warehouse
+                           WHERE w.code = :site
+                        ),
+                        bin_sums AS (
+                          SELECT wibm.warehouse_item_master AS wim_id,
+                                 sum(COALESCE(bos.quantity, 0))::int AS bin_sum_original_qty,
+                                 sum(COALESCE(brs.quantity, 0))::int AS bin_sum_reserved_qty
+                            FROM warehouse_item_bin_master wibm
+                            JOIN site_wims sw ON sw.wim_id = wibm.warehouse_item_master
+                            LEFT JOIN warehouse_bin_physical_original_stock bos ON bos.warehouse_item_bin_master = wibm.id
+                            LEFT JOIN warehouse_bin_physical_reserved_stock  brs ON brs.warehouse_item_bin_master = wibm.id
+                           GROUP BY wibm.warehouse_item_master
+                        ),
+                        active_wims AS (
+                          SELECT DISTINCT sh.warehouse_item_master AS wim_id
+                            FROM stock_history sh
+                            JOIN site_wims sw ON sw.wim_id = sh.warehouse_item_master
+                           WHERE (CAST(:since AS timestamp) IS NULL OR sh.created_date >= :since)
+                        ),
+                        rows AS (
+                          SELECT abs(COALESCE(pos.quantity, 0)
+                                       - COALESCE(bs.bin_sum_original_qty, 0))::int   AS abs_orig,
+                                 abs(COALESCE(prs.quantity, 0)
+                                       - COALESCE(bs.bin_sum_reserved_qty, 0))::int   AS abs_resv,
+                                 (abs(COALESCE(pos.quantity, 0)
+                                       - COALESCE(bs.bin_sum_original_qty, 0))
+                                  + abs(COALESCE(prs.quantity, 0)
+                                       - COALESCE(bs.bin_sum_reserved_qty, 0)))::int  AS abs_total
+                            FROM site_wims sw
+                            LEFT JOIN warehouse_physical_original_stock pos ON pos.warehouse_item_master = sw.wim_id
+                            LEFT JOIN warehouse_physical_reserved_stock  prs ON prs.warehouse_item_master = sw.wim_id
+                            LEFT JOIN bin_sums bs ON bs.wim_id = sw.wim_id
+                           WHERE (CAST(:since AS timestamp) IS NULL
+                                  OR EXISTS (SELECT 1 FROM active_wims aw WHERE aw.wim_id = sw.wim_id))
+                             AND (abs(COALESCE(pos.quantity, 0)
+                                       - COALESCE(bs.bin_sum_original_qty, 0))
+                                  + abs(COALESCE(prs.quantity, 0)
+                                       - COALESCE(bs.bin_sum_reserved_qty, 0))) >= :minDrift
+                        )
+                        SELECT (SELECT count(*) FROM site_wims)::int     AS total_scanned,
+                               COALESCE(count(*), 0)::int                AS wims_at_or_above_threshold,
+                               COALESCE(sum(abs_orig), 0)::bigint        AS total_absolute_original_drift,
+                               COALESCE(sum(abs_resv), 0)::bigint        AS total_absolute_reserved_drift,
+                               COALESCE(max(abs_total), 0)::int          AS worst_absolute_drift
+                          FROM rows
+                        """)
+                .param("site", siteCode)
+                .param("since", since)
+                .param("minDrift", minDrift)
+                .query(RecordRowMapper.of(DriftSummaryRow.class))
+                .single();
+    }
+
+    public record DriftHotspotRow(
+            long wimId,
+            String skuCode,
+            String stockIndicator,
+            int aggregateOriginalQty,
+            int binSumOriginalQty,
+            int originalDivergence,
+            int aggregateReservedQty,
+            int binSumReservedQty,
+            int reservedDivergence,
+            int absoluteTotalDrift,
+            int binCount,
+            Instant lastActivityAt) {
+    }
+
+    public record DriftSummaryRow(
+            int totalScanned,
+            int wimsAtOrAboveThreshold,
+            long totalAbsoluteOriginalDrift,
+            long totalAbsoluteReservedDrift,
+            int worstAbsoluteDrift) {
+    }
 }
