@@ -534,7 +534,7 @@ public class DiagnosePickPackageTool {
                 recentlyOnlineSample(pickers, now));
     }
 
-    private static PickerStatusBreakdown breakdown(List<PickerRow> pickers) {
+    static PickerStatusBreakdown breakdown(List<PickerRow> pickers) {
         int avail = 0, busy = 0, off = 0, brkInit = 0, brkRej = 0, occ = 0, other = 0;
         for (PickerRow p : pickers) {
             String s = p.status() == null ? "" : p.status();

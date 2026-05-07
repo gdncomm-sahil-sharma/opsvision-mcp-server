@@ -336,6 +336,82 @@ public class PickerAccessRepository {
                 .list();
     }
 
+    /**
+     * Find candidate (PP, pick_list, zone) tuples for the picker-availability bottleneck:
+     * open unclaimed pick_lists at the given site whose allotted_zone has eligible
+     * pickers but ZERO are AVAILABLE (i.e. all are BUSY / OFFLINE / on break).
+     *
+     * <p>One row per (pp, pick_list) — the same zone can appear multiple times if
+     * multiple PPs share it. Caller groups by {@code zone_id} in Java.
+     *
+     * <p>Caller passes {@code limit + 1} to detect truncation.
+     */
+    public List<BlockedPpRow> findPpsBlockedByPickerAvailability(String siteCode, int limit) {
+        if (siteCode == null || siteCode.isBlank()) {
+            return List.of();
+        }
+        return stockholm.sql("""
+                        WITH zone_picker_counts AS (
+                          SELECT zzg.zone_id,
+                                 count(DISTINCT p.id) FILTER (WHERE p.active AND NOT p.deleted)
+                                                                                              AS eligible,
+                                 count(DISTINCT p.id) FILTER (WHERE p.active AND NOT p.deleted
+                                                                  AND p.status = 'AVAILABLE') AS available
+                            FROM zone_zone_group zzg
+                            JOIN picker_zone_group pzg ON pzg.zone_group_id = zzg.zone_group_id
+                            JOIN picker p ON p.id = pzg.picker_id
+                            JOIN warehouse w ON w.id = p.warehouse
+                           WHERE w.code = :siteCode
+                           GROUP BY zzg.zone_id
+                        )
+                        SELECT pp.id                            AS pp_id,
+                               pp.code                          AS pp_code,
+                               pp.picking_status,
+                               pl.id                            AS pick_list_id,
+                               pl.status                        AS pick_list_status,
+                               pl.allotted_zone                 AS zone_id,
+                               z.zone_code,
+                               zpc.eligible                     AS eligible_picker_count,
+                               pp.created_date AT TIME ZONE 'UTC' AS pp_created_date,
+                               pl.created_date                  AS pick_list_created_date
+                          FROM pick_package pp
+                          JOIN pick_list_details pld ON pld.pick_package_id = pp.id
+                          JOIN pick_list pl ON pl.id = pld.pick_list_id
+                          JOIN zone z ON z.id = pl.allotted_zone
+                          JOIN warehouse w ON w.id = pl.warehouse_id
+                          JOIN zone_picker_counts zpc ON zpc.zone_id = pl.allotted_zone
+                         WHERE w.code = :siteCode
+                           AND pl.status = 'OPEN'
+                           AND pl.picker_id IS NULL
+                           AND NOT pp.canceled
+                           AND zpc.eligible > 0
+                           AND zpc.available = 0
+                         GROUP BY pp.id, pp.code, pp.picking_status,
+                                  pl.id, pl.status, pl.allotted_zone, z.zone_code,
+                                  zpc.eligible, pp.created_date, pl.created_date
+                         ORDER BY z.zone_code, pp.created_date, pp.id
+                         LIMIT :lim
+                        """)
+                .param("siteCode", siteCode)
+                .param("lim", limit)
+                .query(RecordRowMapper.of(BlockedPpRow.class))
+                .list();
+    }
+
+    /** Slim row produced by {@link #findPpsBlockedByPickerAvailability}. */
+    public record BlockedPpRow(
+            long ppId,
+            String ppCode,
+            String pickingStatus,
+            long pickListId,
+            String pickListStatus,
+            Long zoneId,
+            String zoneCode,
+            int eligiblePickerCount,
+            java.time.Instant ppCreatedDate,
+            java.time.Instant pickListCreatedDate) {
+    }
+
     public int maxOpenPickListsSample() {
         return 20;
     }

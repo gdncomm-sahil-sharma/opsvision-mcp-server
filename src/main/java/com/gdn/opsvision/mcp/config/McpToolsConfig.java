@@ -10,6 +10,7 @@ import com.gdn.opsvision.mcp.tool.DiagnosePickerQueueTool;
 import com.gdn.opsvision.mcp.tool.FindPickPackagesTool;
 import com.gdn.opsvision.mcp.tool.FindPickingTaskRequestsTool;
 import com.gdn.opsvision.mcp.tool.FindPickingTasksTool;
+import com.gdn.opsvision.mcp.tool.FindPpsBlockedByPickerAvailabilityTool;
 import com.gdn.opsvision.mcp.tool.GetSalesOrderTool;
 import com.gdn.opsvision.mcp.tool.GetStockHistoryForItemTool;
 import com.gdn.opsvision.mcp.tool.InventoryForItemTool;
@@ -39,6 +40,7 @@ public class McpToolsConfig {
             FindPickingTasksTool findPickingTasksTool,
             FindPickingTaskRequestsTool findPickingTaskRequestsTool,
             FindPickPackagesTool findPickPackagesTool,
+            FindPpsBlockedByPickerAvailabilityTool findPpsBlockedByPickerAvailabilityTool,
             GetSalesOrderTool getSalesOrderTool,
             GetStockHistoryForItemTool getStockHistoryForItemTool,
             DiagnosePickPackageTool diagnosePickPackageTool,
@@ -48,6 +50,7 @@ public class McpToolsConfig {
                         inventoryForItemTool, reconciliationTool, stockTraceTool,
                         movementHistoryTool, findPickingTasksTool,
                         findPickingTaskRequestsTool, findPickPackagesTool,
+                        findPpsBlockedByPickerAvailabilityTool,
                         getSalesOrderTool, getStockHistoryForItemTool,
                         diagnosePickPackageTool, diagnosePickerQueueTool)
                 .build();
