@@ -128,4 +128,102 @@ public class SalesOrderRepository {
 
     public record StatusCountRow(int lastStatus, long soCount) {
     }
+
+    // ─── findOrdersByLastProcessDate: dashboard view (active snapshot + terminal-in-window)
+
+    /**
+     * SOs currently in non-terminal statuses at a site, grouped by {@code last_status},
+     * with up to {@code sampleSize} most-recent {@code order_item_id}s per bucket. No date
+     * filter — this is a live snapshot of pending / in-flight orders. Terminal statuses
+     * ({@code last_status IN (7, 9, 16, 17)} = CANCELLED / ITEM_ISSUED / REJECTED /
+     * OUT_OF_STOCK_CANCEL) are excluded from this query.
+     */
+    public List<StatusBucketWithSamplesRow> findActiveSnapshotByStatus(
+            String siteCode, int sampleSize) {
+        return stockholm.sql("""
+                        WITH ranked AS (
+                          SELECT so.last_status,
+                                 so.order_item_id,
+                                 row_number() OVER (
+                                   PARTITION BY so.last_status
+                                   ORDER BY so.last_process_date DESC, so.id DESC
+                                 ) AS rn
+                            FROM sales_order so
+                            JOIN warehouse w ON w.id = so.warehouse
+                           WHERE w.code = :site
+                             AND so.last_status NOT IN (7, 9, 16, 17)
+                        )
+                        SELECT last_status,
+                               count(*)::bigint AS so_count,
+                               COALESCE(
+                                 array_agg(order_item_id ORDER BY rn ASC)
+                                   FILTER (WHERE rn <= :sampleSize),
+                                 ARRAY[]::varchar[]
+                               ) AS sample_order_item_ids
+                          FROM ranked
+                         GROUP BY last_status
+                         ORDER BY so_count DESC, last_status
+                        """)
+                .param("site", siteCode)
+                .param("sampleSize", sampleSize)
+                .query(RecordRowMapper.of(StatusBucketWithSamplesRow.class))
+                .list();
+    }
+
+    /**
+     * SOs that reached a terminal status inside {@code [since, until)}, grouped by
+     * {@code last_status}, with up to {@code sampleSize} most-recent {@code order_item_id}s
+     * per bucket. Terminal status set is fixed:
+     * <ul>
+     *   <li>7 = CANCELLED</li>
+     *   <li>9 = ITEM_ISSUED (GIN issued — order shipped)</li>
+     *   <li>16 = REJECTED</li>
+     *   <li>17 = OUT_OF_STOCK_CANCEL</li>
+     * </ul>
+     * Anchored on {@code last_process_date} (Hibernate {@code @UpdateTimestamp}) — this
+     * tracks the moment of the last update on the SO, not specifically the entry into the
+     * terminal state, but for terminal SOs the two coincide in practice (no further
+     * updates expected after the terminal transition).
+     */
+    public List<StatusBucketWithSamplesRow> findTerminalInWindowByStatus(
+            String siteCode, LocalDateTime since, LocalDateTime until, int sampleSize) {
+        return stockholm.sql("""
+                        WITH ranked AS (
+                          SELECT so.last_status,
+                                 so.order_item_id,
+                                 row_number() OVER (
+                                   PARTITION BY so.last_status
+                                   ORDER BY so.last_process_date DESC, so.id DESC
+                                 ) AS rn
+                            FROM sales_order so
+                            JOIN warehouse w ON w.id = so.warehouse
+                           WHERE w.code = :site
+                             AND so.last_status IN (7, 9, 16, 17)
+                             AND so.last_process_date >= :since
+                             AND so.last_process_date <  :until
+                        )
+                        SELECT last_status,
+                               count(*)::bigint AS so_count,
+                               COALESCE(
+                                 array_agg(order_item_id ORDER BY rn ASC)
+                                   FILTER (WHERE rn <= :sampleSize),
+                                 ARRAY[]::varchar[]
+                               ) AS sample_order_item_ids
+                          FROM ranked
+                         GROUP BY last_status
+                         ORDER BY so_count DESC, last_status
+                        """)
+                .param("site", siteCode)
+                .param("since", since)
+                .param("until", until)
+                .param("sampleSize", sampleSize)
+                .query(RecordRowMapper.of(StatusBucketWithSamplesRow.class))
+                .list();
+    }
+
+    public record StatusBucketWithSamplesRow(
+            int lastStatus,
+            long soCount,
+            String[] sampleOrderItemIds) {
+    }
 }

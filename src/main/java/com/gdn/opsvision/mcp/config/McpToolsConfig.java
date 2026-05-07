@@ -11,6 +11,7 @@ import com.gdn.opsvision.mcp.tool.DiagnosePickerQueueTool;
 import com.gdn.opsvision.mcp.tool.FindPickPackagesTool;
 import com.gdn.opsvision.mcp.tool.FindPickingTaskRequestsTool;
 import com.gdn.opsvision.mcp.tool.FindPickingTasksTool;
+import com.gdn.opsvision.mcp.tool.FindOrdersByLastProcessDateTool;
 import com.gdn.opsvision.mcp.tool.FindPpsBlockedByPickerAvailabilityTool;
 import com.gdn.opsvision.mcp.tool.FindReservationDriftHotspotsTool;
 import com.gdn.opsvision.mcp.tool.FindStockDiscrepancyOriginTool;
@@ -43,6 +44,7 @@ public class McpToolsConfig {
             FindPickingTasksTool findPickingTasksTool,
             FindPickingTaskRequestsTool findPickingTaskRequestsTool,
             FindPickPackagesTool findPickPackagesTool,
+            FindOrdersByLastProcessDateTool findOrdersByLastProcessDateTool,
             FindPpsBlockedByPickerAvailabilityTool findPpsBlockedByPickerAvailabilityTool,
             FindReservationDriftHotspotsTool findReservationDriftHotspotsTool,
             FindStockDiscrepancyOriginTool findStockDiscrepancyOriginTool,
@@ -56,6 +58,7 @@ public class McpToolsConfig {
                         inventoryForItemTool, reconciliationTool, stockTraceTool,
                         movementHistoryTool, findPickingTasksTool,
                         findPickingTaskRequestsTool, findPickPackagesTool,
+                        findOrdersByLastProcessDateTool,
                         findPpsBlockedByPickerAvailabilityTool,
                         findReservationDriftHotspotsTool,
                         findStockDiscrepancyOriginTool,
