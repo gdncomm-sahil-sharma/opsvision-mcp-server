@@ -136,8 +136,10 @@ public class GetStockHistoryForItemTool {
             out.add(new WimEvidence(
                     w.wimId(),
                     w.stockIndicator(),
+                    w.stockType(),
                     w.supplierId(),
                     w.supplierCode(),
+                    w.supplierName(),
                     totalEvents,
                     truncated,
                     grouped,

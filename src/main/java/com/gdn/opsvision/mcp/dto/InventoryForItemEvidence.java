@@ -58,6 +58,7 @@ public record InventoryForItemEvidence(
             String stockType,
             Long supplierId,
             String supplierCode,
+            String supplierName,
             Integer aggregateOriginalQty,
             Integer aggregateReservedQty,
             Integer aggregateAvailableQty,

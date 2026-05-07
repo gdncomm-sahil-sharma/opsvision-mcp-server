@@ -401,9 +401,11 @@ public class StockHistoryRepository {
                         WITH site_wims AS (
                           SELECT wim.id              AS wim_id,
                                  wim.stock_indicator AS stock_indicator,
+                                 wim.stock_type      AS stock_type,
                                  i.code              AS sku_code,
                                  wim.supplier        AS supplier_id,
-                                 s.code              AS supplier_code
+                                 s.code              AS supplier_code,
+                                 s.name              AS supplier_name
                             FROM warehouse_item_master wim
                             JOIN warehouse w ON w.id = wim.warehouse
                             JOIN item      i ON i.id = wim.item
@@ -433,8 +435,10 @@ public class StockHistoryRepository {
                         SELECT sw.wim_id,
                                sw.sku_code,
                                sw.stock_indicator,
+                               sw.stock_type,
                                sw.supplier_id,
                                sw.supplier_code,
+                               sw.supplier_name,
                                COALESCE(pos.quantity, 0)::int                              AS aggregate_original_qty,
                                COALESCE(bs.bin_sum_original_qty, 0)::int                   AS bin_sum_original_qty,
                                (COALESCE(pos.quantity, 0)
@@ -549,8 +553,10 @@ public class StockHistoryRepository {
             long wimId,
             String skuCode,
             String stockIndicator,
+            String stockType,
             Long supplierId,
             String supplierCode,
+            String supplierName,
             int aggregateOriginalQty,
             int binSumOriginalQty,
             int originalDivergence,

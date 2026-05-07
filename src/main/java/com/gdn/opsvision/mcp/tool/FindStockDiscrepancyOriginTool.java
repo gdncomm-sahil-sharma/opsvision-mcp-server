@@ -140,7 +140,7 @@ public class FindStockDiscrepancyOriginTool {
 
         return new WimDiscrepancy(
                 w.wimId(), w.stockIndicator(), physicalWarehouseCode,
-                w.supplierId(), w.supplierCode(),
+                w.stockType(), w.supplierId(), w.supplierCode(), w.supplierName(),
                 aggCheck, traceRows.size(), truncated, EVENTS_PER_TRACE, traces);
     }
 

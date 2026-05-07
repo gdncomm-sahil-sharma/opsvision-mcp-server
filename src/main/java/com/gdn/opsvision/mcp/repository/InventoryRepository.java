@@ -69,6 +69,7 @@ public class InventoryRepository {
                                wim.stock_type,
                                wim.supplier   AS supplier_id,
                                s.code         AS supplier_code,
+                               s.name         AS supplier_name,
                                pos.quantity   AS aggregate_original_qty,
                                prs.quantity   AS aggregate_reserved_qty
                         FROM warehouse_item_master wim
@@ -119,6 +120,7 @@ public class InventoryRepository {
                     r.stockType(),
                     r.supplierId(),
                     r.supplierCode(),
+                    r.supplierName(),
                     aggOrig,
                     aggResv,
                     aggAvailable,
@@ -174,8 +176,10 @@ public class InventoryRepository {
         return inventory.sql("""
                         SELECT wim.id              AS wim_id,
                                wim.stock_indicator,
+                               wim.stock_type,
                                wim.supplier        AS supplier_id,
-                               s.code              AS supplier_code
+                               s.code              AS supplier_code,
+                               s.name              AS supplier_name
                           FROM warehouse_item_master wim
                           JOIN warehouse w ON w.id = wim.warehouse
                           JOIN item      i ON i.id = wim.item
@@ -191,7 +195,13 @@ public class InventoryRepository {
                 .list();
     }
 
-    public record WimRef(long wimId, String stockIndicator, Long supplierId, String supplierCode) {
+    public record WimRef(
+            long wimId,
+            String stockIndicator,
+            String stockType,
+            Long supplierId,
+            String supplierCode,
+            String supplierName) {
     }
 
     private Map<Long, List<BinRow>> fetchBinsForWims(List<Long> wimIds) {
@@ -230,6 +240,7 @@ public class InventoryRepository {
             String stockType,
             Long supplierId,
             String supplierCode,
+            String supplierName,
             Integer aggregateOriginalQty,
             Integer aggregateReservedQty) {
     }

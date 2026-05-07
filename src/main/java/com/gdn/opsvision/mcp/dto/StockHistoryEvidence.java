@@ -35,8 +35,10 @@ public record StockHistoryEvidence(
     public record WimEvidence(
             long warehouseItemMasterId,
             String stockIndicator,
+            String stockType,
             Long supplierId,
             String supplierCode,
+            String supplierName,
             long totalEvents,
             boolean truncated,
             List<ActionGroup> groupedByAction,
