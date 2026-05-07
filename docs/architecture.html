@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpsVision MCP Server — Architecture</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  // Initialise Mermaid in neutral theme for crisp PDF export & slide reuse.
+  document.addEventListener('DOMContentLoaded', () => {
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'neutral',
+      securityLevel: 'loose',
+      flowchart: { curve: 'basis', htmlLabels: true, useMaxWidth: true },
+      themeVariables: {
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
+        primaryColor: '#ddf4ff',
+        primaryBorderColor: '#0969da',
+        primaryTextColor: '#1f2328',
+        lineColor: '#57606a'
+      }
+    });
+  });
+</script>
+<style>
+  :root {
+    --fg: #1f2328;
+    --fg-muted: #57606a;
+    --bg: #ffffff;
+    --bg-soft: #f6f8fa;
+    --bg-block: #f6f8fa;
+    --border: #d0d7de;
+    --border-soft: #eaeef2;
+    --accent: #0969da;
+    --accent-soft: #ddf4ff;
+    --kind-override: #cf222e;
+    --kind-blocker:  #bf8700;
+    --kind-stage:    #1a7f37;
+    --kind-context:  #6e7781;
+  }
+
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+                 Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+    margin: 0;
+    padding: 0;
+    font-size: 15px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 28px 80px 28px; }
+
+  h1, h2, h3, h4 {
+    line-height: 1.25;
+    color: var(--fg);
+    margin-top: 1.6em;
+    margin-bottom: 0.6em;
+    font-weight: 600;
+  }
+  h1 { font-size: 2.1em; margin-top: 0; border-bottom: 1px solid var(--border-soft); padding-bottom: 12px; }
+  h2 { font-size: 1.5em; border-bottom: 1px solid var(--border-soft); padding-bottom: 6px; }
+  h3 { font-size: 1.18em; }
+  h4 { font-size: 1.0em; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+  p { margin: 0.7em 0; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 0.25em 0; }
+
+  code, kbd, pre {
+    font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.92em;
+  }
+  code {
+    background: var(--bg-block);
+    padding: 0.12em 0.4em;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--bg-block);
+    padding: 14px 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--border-soft);
+    line-height: 1.4;
+    font-size: 0.85em;
+    margin: 1em 0;
+  }
+  pre code { background: transparent; padding: 0; font-size: inherit; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+    font-size: 0.93em;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    vertical-align: top;
+    text-align: left;
+  }
+  th { background: var(--bg-soft); font-weight: 600; }
+  tr:nth-child(2n) td { background: var(--bg-soft); }
+
+  blockquote {
+    margin: 1.2em 0;
+    padding: 6px 0 6px 16px;
+    border-left: 3px solid var(--accent);
+    color: var(--fg-muted);
+    background: var(--accent-soft);
+    border-radius: 0 4px 4px 0;
+  }
+  blockquote p { margin: 0.4em 0; }
+
+  /* Table of contents */
+  nav.toc {
+    background: var(--bg-soft);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 24px 0 32px 0;
+    font-size: 0.92em;
+  }
+  nav.toc h4 { margin: 0 0 8px 0; font-size: 0.78em; }
+  nav.toc ol { margin: 0; padding-left: 1.4em; columns: 2; column-gap: 32px; }
+  nav.toc li { margin: 0.18em 0; break-inside: avoid; }
+  nav.toc a { color: var(--fg); }
+  nav.toc a:hover { color: var(--accent); }
+
+  /* Section anchors */
+  .anchor {
+    visibility: hidden;
+    margin-left: -1em;
+    width: 1em;
+    display: inline-block;
+    color: var(--fg-muted);
+    text-decoration: none;
+  }
+  h2:hover .anchor, h3:hover .anchor { visibility: visible; }
+
+  /* SignalKind colour swatches */
+  .kind {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 3px;
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.82em;
+    font-weight: 600;
+    color: white;
+    margin-right: 4px;
+    white-space: nowrap;
+  }
+  .kind.override { background: var(--kind-override); }
+  .kind.blocker  { background: var(--kind-blocker); }
+  .kind.stage    { background: var(--kind-stage); }
+  .kind.context  { background: var(--kind-context); }
+
+  /* Layered architecture diagram styling */
+  .layers {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 1.2em 0;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .layer {
+    padding: 12px 18px;
+    background: var(--bg-soft);
+    border-bottom: 1px solid var(--border-soft);
+    position: relative;
+  }
+  .layer:last-child { border-bottom: none; }
+  .layer .label {
+    font-weight: 600;
+    font-size: 0.9em;
+    margin-bottom: 4px;
+    color: var(--accent);
+  }
+  .layer .desc {
+    font-size: 0.86em;
+    color: var(--fg-muted);
+    line-height: 1.45;
+  }
+  .layer-arrow {
+    text-align: center;
+    height: 0;
+    line-height: 0;
+    color: var(--fg-muted);
+    font-size: 14px;
+    background: var(--bg);
+  }
+
+  /* Mermaid diagram + "show source" reveal */
+  .diagram {
+    margin: 1.4em 0;
+    padding: 18px;
+    background: var(--bg);
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    overflow-x: auto;
+  }
+  .diagram .mermaid {
+    text-align: center;
+    margin: 0;
+  }
+  .diagram details {
+    margin-top: 12px;
+    border-top: 1px dashed var(--border-soft);
+    padding-top: 8px;
+  }
+  .diagram details summary {
+    font-size: 0.82em;
+    color: var(--fg-muted);
+    cursor: pointer;
+    user-select: none;
+    padding: 2px 0;
+  }
+  .diagram details summary:hover { color: var(--accent); }
+  .diagram details pre {
+    margin: 8px 0 0 0;
+    background: var(--bg-soft);
+    font-size: 0.78em;
+    padding: 10px 14px;
+  }
+
+  /* Header / metadata */
+  .doc-meta {
+    color: var(--fg-muted);
+    font-size: 0.92em;
+    margin: -8px 0 24px 0;
+  }
+  .doc-meta strong { color: var(--fg); }
+
+  /* Footer */
+  footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-soft);
+    color: var(--fg-muted);
+    font-size: 0.85em;
+    text-align: center;
+  }
+
+  /* Print-friendly */
+  @media print {
+    body { font-size: 11pt; }
+    .wrap { max-width: 100%; padding: 0 24px; }
+    nav.toc { page-break-after: always; }
+    h2 { page-break-before: auto; }
+    pre, table, blockquote { page-break-inside: avoid; }
+    a { color: var(--fg); text-decoration: none; }
+  }
+
+  /* Mobile */
+  @media (max-width: 720px) {
+    body { font-size: 14px; }
+    .wrap { padding: 16px 14px 60px 14px; }
+    nav.toc ol { columns: 1; }
+    pre { font-size: 0.78em; }
+    table { font-size: 0.85em; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>OpsVision MCP Server — Architecture</h1>
+
+<blockquote>
+  A read-only Model Context Protocol (MCP) server that exposes warehouse-picking
+  investigation tools for the SCPS Marunda site, designed for AI agents to
+  reconstruct timelines, evaluate operational rules, and pull structured
+  evidence — without writing a line back to production data.
+</blockquote>
+
+<p class="doc-meta">
+  <strong>Audience.</strong> Engineers, ops, and stakeholders evaluating how the server fits
+  into the SCPS investigation tooling. Suitable for slide adaptation.
+</p>
+
+<nav class="toc">
+  <h4>Contents</h4>
+  <ol>
+    <li><a href="#exec">Executive summary</a></li>
+    <li><a href="#context">System context</a></li>
+    <li><a href="#high-level">High-level architecture</a></li>
+    <li><a href="#datasources">The three datasources</a></li>
+    <li><a href="#tools">The 13 tools</a></li>
+    <li><a href="#domain">Domain modeling</a></li>
+    <li><a href="#crosscut">Cross-cutting: solved problems</a></li>
+    <li><a href="#deployment">Deployment &amp; runtime</a></li>
+    <li><a href="#testing">Testing strategy</a></li>
+    <li><a href="#decisions">Key design decisions</a></li>
+    <li><a href="#roadmap">What's next</a></li>
+    <li><a href="#appendix-a">Appendix A · Module dependency graph</a></li>
+    <li><a href="#appendix-b">Appendix B · Tool cheat-sheet</a></li>
+  </ol>
+</nav>
+
+<h2 id="exec">1. Executive summary <a class="anchor" href="#exec">#</a></h2>
+
+<table>
+<tr><th style="width:25%">Aspect</th><th>Value</th></tr>
+<tr><td><strong>Purpose</strong></td><td>Surface SCPS warehouse picking-flow facts to AI agents over MCP</td></tr>
+<tr><td><strong>Tech stack</strong></td><td>Java 21 · Spring Boot 4.0.6 · Spring AI 2.0.0-M5 · MCP over Streamable HTTP (negotiates 2025-03-26 or 2025-11-25) · JdbcClient · HikariCP 7 · PostgreSQL 13</td></tr>
+<tr><td><strong>Scope</strong></td><td>13 read-only tools, 3 PostgreSQL datasources, 12 repositories, 13 evidence DTO records + 9 lifecycle enums + <code>SignalKind</code> enum</td></tr>
+<tr><td><strong>Site</strong></td><td>Marunda (<code>MAR-0000000001</code> distribution + <code>MAN-0000000002</code> non-distribution)</td></tr>
+<tr><td><strong>Read-only</strong></td><td>Triple-enforced (Hikari · session SQL · <code>@Transactional(readOnly=true)</code>) + integration test</td></tr>
+<tr><td><strong>Philosophy</strong></td><td><strong>Evidence, not verdicts</strong> — tools return structured facts; the agent draws conclusions</td></tr>
+</table>
+
+<p>The server is a thin, bounded façade over three production-shape PostgreSQL
+databases. It does no business writes, holds no state, and never passes
+operator opinions to the agent.</p>
+
+<h2 id="context">2. System context <a class="anchor" href="#context">#</a></h2>
+
+<div class="diagram">
+<pre class="mermaid">
+flowchart TB
+    Agent["Operations / Support Agent<br/><small>(LLM running on harness)</small>"]:::agent
+
+    subgraph Server["opsvision-mcp-server (this repo)"]
+        direction TB
+        Tools["Tool layer<br/><small>13 @Tool methods</small>"]
+        Repos["Repository layer<br/><small>12 repositories</small>"]
+        JDBC["JdbcClient × 3<br/><small>Hikari pools</small>"]
+        Tools --> Repos --> JDBC
+    end
+
+    subgraph DBs["PostgreSQL 13 — read replicas in QA2"]
+        direction LR
+        Stockholm[("stockholm_marunda_restore<br/><small>DB 413 · pick_package · sales_order ·<br/>picker · pick_list · packing_order</small>")]
+        Inventory[("warehouse_inventory_marunda<br/><small>DB 417 · warehouse_item_master · bin ·<br/>stock_history</small>")]
+        Movement[("warehouse_stock_movement_marunda<br/><small>DB 416 · picking_task ·<br/>picking_task_request</small>")]
+    end
+
+    Agent -- "MCP / JSON-RPC 2.0<br/>over Streamable HTTP" --> Server
+    JDBC --> Stockholm
+    JDBC --> Inventory
+    JDBC --> Movement
+
+    classDef agent fill:#fff8c5,stroke:#9a6700,stroke-width:1.5px;
+    classDef default rx:6,ry:6;
+</pre>
+<details><summary>Mermaid source</summary><pre>flowchart TB
+    Agent["Operations / Support Agent&lt;br/&gt;&lt;small&gt;(LLM running on harness)&lt;/small&gt;"]:::agent
+
+    subgraph Server["opsvision-mcp-server (this repo)"]
+        direction TB
+        Tools["Tool layer&lt;br/&gt;&lt;small&gt;13 @Tool methods&lt;/small&gt;"]
+        Repos["Repository layer&lt;br/&gt;&lt;small&gt;12 repositories&lt;/small&gt;"]
+        JDBC["JdbcClient × 3&lt;br/&gt;&lt;small&gt;Hikari pools&lt;/small&gt;"]
+        Tools --&gt; Repos --&gt; JDBC
+    end
+
+    subgraph DBs["PostgreSQL 13 — read replicas in QA2"]
+        direction LR
+        Stockholm[("stockholm_marunda_restore&lt;br/&gt;&lt;small&gt;DB 413&lt;/small&gt;")]
+        Inventory[("warehouse_inventory_marunda&lt;br/&gt;&lt;small&gt;DB 417&lt;/small&gt;")]
+        Movement[("warehouse_stock_movement_marunda&lt;br/&gt;&lt;small&gt;DB 416&lt;/small&gt;")]
+    end
+
+    Agent -- "MCP / JSON-RPC 2.0&lt;br/&gt;over Streamable HTTP" --&gt; Server
+    JDBC --&gt; Stockholm
+    JDBC --&gt; Inventory
+    JDBC --&gt; Movement
+
+    classDef agent fill:#fff8c5,stroke:#9a6700,stroke-width:1.5px;
+    classDef default rx:6,ry:6;</pre></details>
+</div>
+
+<h4>Key boundaries</h4>
+<ul>
+  <li>The server <strong>does not</strong> call upstream business services (Stockholm WMS, Movement, Inventory). It reads the same Postgres schemas those services persist into.</li>
+  <li>The server <strong>never</strong> issues <code>INSERT/UPDATE/DELETE</code>; all three layers of read-only enforcement reject DML.</li>
+  <li>No sessions, caches with TTL, or in-flight state — every call is stateless except for one tiny in-memory map (the <code>warehouse_defect_map</code> lookup, ~tens of rows, reloaded on cold restart).</li>
+</ul>
+
+<h2 id="high-level">3. High-level architecture <a class="anchor" href="#high-level">#</a></h2>
+
+<p>The server is a four-layer Spring Boot application:</p>
+
+<div class="diagram">
+<pre class="mermaid">
+flowchart TB
+    L1["<b>Transport</b><br/>spring-ai-starter-mcp-server-webmvc<br/><small>MCP 2025-03-26 over Streamable HTTP · :8081/mcp</small>"]
+    L2["<b>Tool layer · 13 @Tool methods · McpToolsConfig</b><br/><small>Composes evidence packs from repos · runs pure-Java derivations<br/>(lifecycle stages · boolean signals · queue-rank · freshness)</small>"]
+    L3["<b>Repository layer · 12 @Repository classes</b><br/><small>JdbcClient + named-param SQL + custom RecordRowMapper<br/>@Transactional(readOnly = true) on every method</small>"]
+    L4["<b>DataSource layer · DataSourcesConfig · 3 Hikari pools</b><br/><small>stockholmJdbcClient · inventoryJdbcClient · movementJdbcClient<br/>read-only · 5 connections · init-SQL: SET default_transaction_read_only = on</small>"]
+    L5[("PostgreSQL 13 · 3 databases · multi-host failover URL<br/><small>central-postgres13-{01,02}.qa2-sg.cld:5432 · targetServerType=master</small>")]
+    L1 --> L2 --> L3 --> L4 --> L5
+
+    classDef default rx:8,ry:8,stroke-width:1.2px;
+</pre>
+<details><summary>Mermaid source</summary><pre>flowchart TB
+    L1["&lt;b&gt;Transport&lt;/b&gt;&lt;br/&gt;spring-ai-starter-mcp-server-webmvc"]
+    L2["&lt;b&gt;Tool layer&lt;/b&gt;&lt;br/&gt;13 @Tool methods · McpToolsConfig"]
+    L3["&lt;b&gt;Repository layer&lt;/b&gt;&lt;br/&gt;12 @Repository · JdbcClient · RecordRowMapper"]
+    L4["&lt;b&gt;DataSource layer&lt;/b&gt;&lt;br/&gt;DataSourcesConfig · 3 Hikari pools"]
+    L5[("PostgreSQL 13 · 3 databases · failover URL")]
+    L1 --&gt; L2 --&gt; L3 --&gt; L4 --&gt; L5</pre></details>
+</div>
+
+<h3>Source-tree layout</h3>
+
+<pre>src/main/java/com/gdn/opsvision/mcp/
+├── OpsvisionMcpApplication.java     (@SpringBootApplication entry)
+├── config/
+│   ├── DataSourcesConfig.java       (3 Hikari + 3 JdbcClient beans)
+│   └── McpToolsConfig.java          (registers 13 @Tool methods)
+├── tool/                            (13 service classes, @Service @Tool methods)
+│   ├── DiagnosePickPackageTool.java
+│   ├── DiagnosePickerQueueTool.java
+│   ├── FindPickingTaskRequestsTool.java
+│   ├── FindPickingTasksTool.java
+│   ├── GetSalesOrderTool.java
+│   ├── GetStockHistoryForItemTool.java
+│   ├── InventoryForItemTool.java
+│   ├── MovementHistoryTool.java
+│   ├── PickListReadinessTool.java
+│   ├── PickListTool.java
+│   ├── PickPackageTool.java
+│   ├── ReconciliationTool.java
+│   ├── StockTraceTool.java
+│   └── util/
+│       └── IsoBound.java            (ISO date / datetime parser for tz-less timestamp params)
+├── repository/                      (12 @Repository classes)
+│   ├── InventoryRepository.java
+│   ├── MovementRepository.java
+│   ├── MovementSearchRepository.java
+│   ├── PickListRepository.java
+│   ├── PickPackageDiagnosisRepository.java
+│   ├── PickPackageRepository.java
+│   ├── PickerAccessRepository.java
+│   ├── ReconciliationRepository.java
+│   ├── SalesOrderRepository.java
+│   ├── StockHistoryRepository.java
+│   ├── StuckRulesRepository.java
+│   ├── WarehouseDefectMapRepository.java
+│   └── support/
+│       └── RecordRowMapper.java     (record-aware row mapper, fixes pgjdbc Instant gap)
+└── dto/                             (23 evidence DTOs + 9 lifecycle enums)
+    ├── PickPackageEvidence.java     (header + handling units + sales orders)
+    ├── PickPackageDiagnosisEvidence.java   (composite "why is this stuck?")
+    ├── PickerQueueDiagnosisEvidence.java   (composite "why is this picker idle?")
+    ├── ...
+    └── SignalKind.java              (OPERATOR_OVERRIDE / BLOCKER_* / STAGE / CONTEXT)
+</pre>
+
+<h2 id="datasources">4. The three datasources <a class="anchor" href="#datasources">#</a></h2>
+
+<p>Each domain DB has a single purpose and a single set of repositories.
+There is <strong>no JPA / Hibernate</strong> — only <code>JdbcClient</code> with hand-written named-parameter SQL.</p>
+
+<table>
+<tr><th>Bean qualifier</th><th>Database</th><th>DB #</th><th>Purpose</th><th>Schema highlights</th></tr>
+<tr>
+  <td><code>stockholmJdbcClient</code></td>
+  <td><code>stockholm_marunda_restore</code></td>
+  <td>413</td>
+  <td>Pick-package, sales-order, picker, pick-list, packing-order state</td>
+  <td><code>pick_package</code>, <code>sales_order</code>, <code>picker</code>, <code>pick_list</code>, <code>packing_order</code>, <code>picking_item</code>, <code>pick_list_details</code>, <code>warehouse_defect_map</code>, <code>picker_zone_group</code>, <code>zone_zone_group</code>, <code>zone</code></td>
+</tr>
+<tr>
+  <td><code>inventoryJdbcClient</code></td>
+  <td><code>warehouse_inventory_marunda</code></td>
+  <td>417</td>
+  <td>Bin-level stock, stock history</td>
+  <td><code>warehouse_item_master</code>, <code>bin</code>, <code>warehouse_item_bin_master</code>, <code>warehouse_physical_*_stock</code>, <code>stock_history</code></td>
+</tr>
+<tr>
+  <td><code>movementJdbcClient</code></td>
+  <td><code>warehouse_stock_movement_marunda</code></td>
+  <td>416</td>
+  <td>WCS picking-task lifecycle</td>
+  <td><code>picking_task</code>, <code>picking_task_request</code>, <code>picking_task_list</code>, status-partitioned shadow tables</td>
+</tr>
+</table>
+
+<h3>The cross-DB join</h3>
+<p>There is no foreign key across DBs. The two stitching keys are:</p>
+<ul>
+  <li><strong><code>item.code</code></strong> (SKU code) — same string in every DB; joins inventory rows to stockholm picking demand.</li>
+  <li><strong><code>stock_trace_id</code></strong> (UUID) — written by stockholm when reservation is created, read across both inventory <code>stock_history</code> and movement <code>picking_task</code> to follow one unit of stock through its lifetime.</li>
+</ul>
+
+<div class="diagram">
+<pre class="mermaid">
+flowchart LR
+    subgraph S["stockholm_marunda_restore"]
+        S_so["sales_order"]
+        S_pi["picking_item<br/><small>stock_trace_id</small>"]
+        S_pl["pick_list /<br/>pick_list_details"]
+    end
+
+    subgraph I["warehouse_inventory_marunda"]
+        I_wim["warehouse_item_master<br/><small>(warehouse, item)</small>"]
+        I_sh["stock_history<br/><small>stock_trace_id · item.code</small>"]
+    end
+
+    subgraph M["warehouse_stock_movement_marunda"]
+        M_pt["picking_task<br/><small>stock_trace_id · sku_code</small>"]
+        M_ptr["picking_task_request"]
+    end
+
+    S_pi -- "stock_trace_id (UUID)" --- I_sh
+    S_pi -- "stock_trace_id (UUID)" --- M_pt
+    I_wim -. "item.code (SKU)" .- M_pt
+    I_wim -. "item.code (SKU)" .- S_pi
+
+    classDef default rx:6,ry:6;
+</pre>
+<details><summary>Mermaid source</summary><pre>flowchart LR
+    subgraph S["stockholm"]
+        S_pi["picking_item (stock_trace_id)"]
+    end
+    subgraph I["warehouse_inventory"]
+        I_sh["stock_history (stock_trace_id · item.code)"]
+        I_wim["warehouse_item_master"]
+    end
+    subgraph M["warehouse_stock_movement"]
+        M_pt["picking_task (stock_trace_id · sku_code)"]
+    end
+    S_pi -- "stock_trace_id (UUID)" --- I_sh
+    S_pi -- "stock_trace_id (UUID)" --- M_pt
+    I_wim -. "item.code (SKU)" .- M_pt
+    I_wim -. "item.code (SKU)" .- S_pi</pre></details>
+</div>
+
+<h3>Read-only enforcement (triple-layered)</h3>
+
+<p>Defined in <code>DataSourcesConfig</code> + <code>application.yml</code>, verified by <code>ReadOnlyEnforcementTest</code>:</p>
+
+<pre>1. Hikari    : read-only: true            → Connection.setReadOnly(true)
+2. Init SQL  : SET default_transaction_   → server-side rejection of DML
+                read_only = on
+3. Spring TX : @Transactional(readOnly=    → annotation on every repo method
+                true)</pre>
+
+<p>Postgres rejects DML with SQLState <code>25006</code> ("read_only_sql_transaction").
+On a DB where the role lacks <code>UPDATE</code> grants entirely,
+"permission denied for table …" is the equivalent rejection. The integration test asserts both.</p>
+
+<blockquote>
+  <strong>Why three layers?</strong> Belt-and-suspenders for a service that an LLM agent
+  drives. A single bug (forgetting <code>@Transactional</code>, a stale Hikari config,
+  a misconfigured role) cannot punch through more than one layer.
+</blockquote>
+
+<h2 id="tools">5. The 13 tools <a class="anchor" href="#tools">#</a></h2>
+
+<p>Tools are grouped by purpose. Each is a <code>@Tool</code>-annotated method on a
+<code>@Service</code> class, registered via <code>McpToolsConfig.opsvisionTools(...)</code>.</p>
+
+<h3>A) Single-entity fetch (slow, deep state)</h3>
+<table>
+<tr><th>Tool</th><th>Returns</th><th>Primary use</th></tr>
+<tr><td><code>getPickPackage</code></td><td><code>PickPackageEvidence</code> (header + handling units + sales orders)</td><td>Snapshot of one PP for triage</td></tr>
+<tr><td><code>getPickList</code></td><td><code>PickListEvidence</code> (header + line-item details)</td><td>Snapshot of one pick list</td></tr>
+<tr><td><code>getSalesOrder</code></td><td><code>SalesOrderEvidence</code> (so + picking_items, keyed by <code>order_item_id</code>)</td><td>Upstream order context</td></tr>
+<tr><td><code>getInventoryForItem</code></td><td><code>InventoryForItemEvidence</code> (1–2 WIM rows + bins, with <code>physicalWarehouseCode</code>)</td><td>"Where does this SKU's stock physically live?"</td></tr>
+</table>
+
+<h3>B) Composite diagnose (multiple repos, derived signals)</h3>
+<table>
+<tr><th>Tool</th><th>Returns</th><th>Question it answers</th></tr>
+<tr><td><code>diagnosePickPackage</code></td><td><code>PickPackageDiagnosisEvidence</code> (state, priority, allocations, source areas, replenishment, batch consolidation, packing order, movement-DB rows, <strong>34 boolean signals</strong>, picker-pool freshness)</td><td>"Why isn't this PP being picked / progressing?"</td></tr>
+<tr><td><code>diagnosePickerQueue</code></td><td><code>PickerQueueDiagnosisEvidence</code> (picker state, zone-group memberships, available work, sibling pickers, <strong>13 boolean signals</strong>)</td><td>"Why is THIS picker's queue empty?"</td></tr>
+<tr><td><code>evaluatePickListReadiness</code></td><td><code>PickListReadinessEvidence</code> (13 rule pass/fail with inputs)</td><td>"Is this PP truly stuck per the 13-rule support checklist?"</td></tr>
+<tr><td><code>reconcileInventoryVsReservation</code></td><td><code>InventoryReservationReconciliation</code> (per-SKU demand vs supply with divergence math)</td><td>"Is the picking demand satisfied by available stock?"</td></tr>
+</table>
+
+<h3>C) Lifecycle ledgers (warehouse-stock-movement chain)</h3>
+<table>
+<tr><th>Tool</th><th>Returns</th><th>Primary use</th></tr>
+<tr><td><code>getMovementHistory</code></td><td><code>MovementHistoryEvidence</code> (every WCS task / task-request for a PP, sorted)</td><td>Full picking-side audit trail</td></tr>
+<tr><td><code>getStockHistoryForItem</code></td><td><code>StockHistoryEvidence</code> (windowed <code>stock_history</code> rows for a SKU at a site)</td><td>Per-item stock movement reconstruction</td></tr>
+<tr><td><code>getStockTrace</code></td><td><code>StockTraceEvidence</code> (every row sharing one <code>stock_trace_id</code>)</td><td>Follow one unit of stock end-to-end</td></tr>
+</table>
+
+<h3>D) Bulk search (filter then iterate)</h3>
+<table>
+<tr><th>Tool</th><th>Returns</th><th>Primary use</th></tr>
+<tr><td><code>findPickingTasks</code></td><td><code>PickingTaskSearchEvidence</code> (filtered list of <code>picking_task</code> rows)</td><td>Find tasks matching status / time / picker / SKU</td></tr>
+<tr><td><code>findPickingTaskRequests</code></td><td><code>PickingTaskRequestSearchEvidence</code> (filtered task-request rows)</td><td>Find requests stuck in HOLD, etc.</td></tr>
+</table>
+
+<h3>Cap-and-truncate everywhere</h3>
+<p>Every tool that returns variable-length lists has a hard cap with a truncation flag.
+Concrete values across the codebase:</p>
+<table>
+<tr><th>Where</th><th style="text-align:right">Cap</th><th>Truncation surfaced as</th></tr>
+<tr><td><code>getInventoryForItem</code> per-WIM bins</td><td style="text-align:right">50</td><td><code>binsTruncated:true</code></td></tr>
+<tr><td>Eligible-picker pool per zone</td><td style="text-align:right">500</td><td>(size implicit; bounded query)</td></tr>
+<tr><td>Source-area → zone resolution</td><td style="text-align:right">50</td><td><code>resolvedZonesTruncated:true</code></td></tr>
+<tr><td><code>findPickingTasks</code> / <code>findPickingTaskRequests</code> rows</td><td style="text-align:right">200</td><td><code>truncated:true</code> on response</td></tr>
+<tr><td><code>diagnosePickPackage</code> movement-DB rows</td><td style="text-align:right">20</td><td>implicit (most-recent-first)</td></tr>
+<tr><td>Picker-freshness <code>recentlyOnlinePickers</code> sample</td><td style="text-align:right">5</td><td>implicit</td></tr>
+<tr><td>Batch-consolidation siblings</td><td style="text-align:right">1000</td><td>implicit</td></tr>
+<tr><td><code>getStockHistoryForItem</code> per-WIM events</td><td style="text-align:right">configurable + 1 sentinel</td><td><code>truncated:true</code></td></tr>
+</table>
+<p>The principle: <strong>the agent never gets an unbounded list, and an empty / capped
+list is always distinguishable from the "no row exists" state.</strong></p>
+
+<h3>Composition pattern</h3>
+<p>Composite tools (<code>diagnosePickPackage</code>, <code>diagnosePickerQueue</code>, <code>reconcile…</code>)
+fan out to multiple repositories and assemble the result in pure Java —
+<strong>no chained DB roundtrips inside a single SQL statement</strong>. The boundary
+between SQL (in repos) and derivation (in tools) is strict:</p>
+<ul>
+  <li><strong>Repo</strong> returns row-shaped records carrying raw DB values + their nullable Java types.</li>
+  <li><strong>Tool</strong> attaches lifecycle stages, computes boolean signals, applies vacuous-true suppression, populates the public DTO.</li>
+</ul>
+<p>This makes every signal <strong>deterministic and testable in pure Java</strong>.</p>
+
+<h2 id="domain">6. Domain modeling <a class="anchor" href="#domain">#</a></h2>
+
+<p>Two patterns dominate the DTO design.</p>
+
+<h3>6.1 Lifecycle stage enums</h3>
+
+<p>For every state machine in the SCPS schema, there is a typed Java enum that
+mirrors it. This wraps brittle string columns in a value-checked, source-cited
+enum the agent can pattern-match on.</p>
+
+<table>
+<tr><th>Enum</th><th>Mirrors</th><th>Source file cited</th></tr>
+<tr><td><code>OutboundStockLifecycleStage</code></td><td>The 14-step <code>stock_action_type</code> chain (<code>OUT_RESERVE_*</code> … <code>DECREASE_BIN</code>)</td><td>warehouse-inventory enum</td></tr>
+<tr><td><code>HandlingUnitLifecycleStage</code></td><td>5 stages of <code>pick_package_handling_units.status</code></td><td>stockholm <code>PickPackageHandlingUnitStatus</code></td></tr>
+<tr><td><code>PickListLifecycleStage</code></td><td>OPEN_UNCLAIMED / OPEN_CLAIMED / IN_PROGRESS / COMPLETE / CLOSED</td><td><code>PickListStatus</code> + <code>picker_id</code></td></tr>
+<tr><td><code>SalesOrderLifecycleStage</code></td><td>9 stages over 18 SOStatus ordinals</td><td>stockholm <code>SOStatus</code></td></tr>
+<tr><td><code>PickingTaskLifecycleStage</code></td><td>8 stages of WCS <code>MovementTaskStatus</code></td><td>warehouse-stock-movement</td></tr>
+<tr><td><code>PickingTaskRequestLifecycleStage</code></td><td>7 stages incl. <code>BLOCKED_HOLD</code> (Pattern A signal)</td><td>warehouse-stock-movement</td></tr>
+<tr><td><code>PackingOrderLifecycleStage</code></td><td>Derived from <code>(active, claimed_date, good_issued_note)</code></td><td>stockholm <code>PackingService</code></td></tr>
+<tr><td><code>PickerOperationalStage</code></td><td>Picker availability lifecycle</td><td>stockholm <code>PickerStatus</code></td></tr>
+</table>
+
+<p>Every value in every enum carries a source-file reference so a regression-prone enum
+can be regenerated from authoritative source code rather than reverse-engineered.</p>
+
+<h3>6.2 Signals + SignalKind classification</h3>
+
+<p>Composite tools emit a flat block of pre-computed boolean signals (e.g. <code>isCanceled</code>,
+<code>isInProblemSolve</code>, <code>hasReplenishmentDeficit</code>, <code>hasOpenTaskRequest</code>). Each signal is
+classified by <code>SignalKind</code>:</p>
+
+<pre>
+<span class="kind override">OPERATOR_OVERRIDE</span>   ← e.g. isRejected, isInactive (operator-set, dominates state)
+<span class="kind blocker">BLOCKER_EXTERNAL</span>    ← e.g. isStorageNotAvailable (waiting on upstream system)
+<span class="kind blocker">BLOCKER_INTERNAL</span>    ← e.g. hasEligiblePickersButNoneAvailable (capacity limit)
+<span class="kind stage">STAGE</span>               ← e.g. isReadyForManualPicking, isPartialPackage
+<span class="kind context">CONTEXT</span>             ← e.g. isInBatchOrWave, hasMultipleSourceAreas
+</pre>
+
+<div class="diagram">
+<pre class="mermaid">
+flowchart TB
+    A["<b>OPERATOR_OVERRIDE</b><br/><small>Operator-set, dominates state</small><br/><small>e.g. isRejected · isInactive</small>"]:::override
+    B1["<b>BLOCKER_EXTERNAL</b><br/><small>Waiting on upstream system</small><br/><small>e.g. isStorageNotAvailable</small>"]:::blocker
+    B2["<b>BLOCKER_INTERNAL</b><br/><small>Capacity / configuration limit</small><br/><small>e.g. hasEligiblePickersButNoneAvailable</small>"]:::blocker
+    S["<b>STAGE</b><br/><small>Lifecycle state of the artefact</small><br/><small>e.g. isReadyForManualPicking · isPartialPackage</small>"]:::stage
+    C["<b>CONTEXT</b><br/><small>Background fact, never the headline</small><br/><small>e.g. isInBatchOrWave · hasMultipleSourceAreas</small>"]:::context
+
+    A == "dominates" ==> B1
+    A == "dominates" ==> B2
+    B1 == "dominates" ==> S
+    B2 == "dominates" ==> S
+    S == "dominates" ==> C
+
+    classDef override fill:#ffebe9,stroke:#cf222e,color:#82071e,stroke-width:1.5px;
+    classDef blocker  fill:#fff8c5,stroke:#bf8700,color:#633c01,stroke-width:1.5px;
+    classDef stage    fill:#dafbe1,stroke:#1a7f37,color:#0a3622,stroke-width:1.5px;
+    classDef context  fill:#eaeef2,stroke:#6e7781,color:#24292f,stroke-width:1.5px;
+    classDef default  rx:6,ry:6;
+</pre>
+<details><summary>Mermaid source</summary><pre>flowchart TB
+    A[OPERATOR_OVERRIDE]:::override
+    B1[BLOCKER_EXTERNAL]:::blocker
+    B2[BLOCKER_INTERNAL]:::blocker
+    S[STAGE]:::stage
+    C[CONTEXT]:::context
+    A == dominates ==&gt; B1
+    A == dominates ==&gt; B2
+    B1 == dominates ==&gt; S
+    B2 == dominates ==&gt; S
+    S == dominates ==&gt; C
+
+    classDef override fill:#ffebe9,stroke:#cf222e;
+    classDef blocker  fill:#fff8c5,stroke:#bf8700;
+    classDef stage    fill:#dafbe1,stroke:#1a7f37;
+    classDef context  fill:#eaeef2,stroke:#6e7781;</pre></details>
+</div>
+
+<p>This <strong>encodes the dominance hierarchy structurally</strong>. The agent can lead its
+narrative with <span class="kind override">OPERATOR_OVERRIDE</span> signals (most decisive) and
+demote <span class="kind context">CONTEXT</span> signals (least decisive) without our server taking a position on
+which specific signal "wins" within a kind. The mapping is enforced by a reflective
+coverage test: <strong>every</strong> boolean field on a workflow-signals record must have a
+<code>SignalKind</code> entry, or the test fails.</p>
+
+<h3>6.3 Vacuous-true suppression</h3>
+
+<p>For derived booleans that quantify over a (possibly empty) set, we force the
+result to <code>false</code> when the input set is empty and emit a derivation note.</p>
+
+<blockquote>
+  <strong>Example.</strong> <code>isOnlyPickerForOwnZoneGroups</code> is technically <code>true</code> for a picker
+  with no zone-groups (universal-quantifier-over-empty-set) but reads as
+  "they're the only one" — wrong intuition. We force it <code>false</code> and let
+  <code>hasNoZoneGroupMemberships</code> carry the meaning. The fixture-based unit
+  tests assert this for every derived signal.
+</blockquote>
+
+<h3>6.4 Evidence, not verdicts (the project's first principle)</h3>
+
+<p>Every DTO in <code>dto/</code> is named <code>*Evidence</code>. Tool descriptions repeat the line
+<em>"Returns FACTS, not VERDICTS."</em>. Concretely:</p>
+
+<ul>
+  <li>No tool returns "this PP is stuck because X". It returns the fact-set the agent uses to <em>form</em> "this PP is stuck because X".</li>
+  <li>A row that exists is a fact. A row that's missing is a fact (<code>found:false</code>).</li>
+  <li>A divergence is an arithmetic difference (<code>availableMinusRemaining = -3</code>), not a label ("UNDER-STOCKED").</li>
+  <li>Lifecycle stages cite their source file so the agent can quote ground truth.</li>
+</ul>
+
+<p>This keeps the server <strong>stable across operational policy changes</strong>. When ops
+change the meaning of "stuck", the agent's prompt updates. The server doesn't.</p>
+
+<h3>6.5 Pattern A / B / C — the named operational failure modes</h3>
+
+<p>Three recurring stuck-PP fingerprints are surfaced directly by <code>diagnosePickPackage</code>
+without the agent having to chain tools. Each has a precise signal signature:</p>
+
+<table>
+<tr><th>Pattern</th><th>Failure mode</th><th>Diagnostic signature</th></tr>
+<tr>
+  <td><strong>Pattern A</strong></td>
+  <td>WCS task-request stuck in <code>HOLD</code> — request was created in <code>warehouse_stock_movement</code> but never spawned child movement-tasks</td>
+  <td><code>hasOpenTaskRequest=true</code> AND <code>hasOpenMovementTask=false</code> (visible in <code>movementTaskRequests</code> rows with status <code>HOLD</code>)</td>
+</tr>
+<tr>
+  <td><strong>Pattern B</strong></td>
+  <td>WCS phantom-close — task transitioned <code>PENDING_CLOSED → CLOSED</code> without the corresponding <code>DECREASE_BIN</code> event in inventory <code>stock_history</code></td>
+  <td><code>OutboundStockLifecycleStage.furthestStage = BIN_RESERVATION</code> for picking-relevant <code>stock_action_type</code> rows</td>
+</tr>
+<tr>
+  <td><strong>Pattern C</strong></td>
+  <td>WCS consolidation packing-handoff failure — handling unit reaches <code>PICKING_COMPLETE</code> but the <code>packing_order</code> was never created (or was hard-deleted)</td>
+  <td><code>packingOrderMissing=true</code> (signal computed when <code>picking_status</code> is <code>REACHED_TO_QC</code> or <code>PICKING_COMPLETE</code> and <code>packingOrder.present=false</code>); <code>wcsConsolidationStuck=true</code> on the related handling unit</td>
+</tr>
+</table>
+
+<p>These names are used throughout the codebase (commit messages, code comments,
+signal documentation). The diagnose tool's evidence pack lets the agent
+recognise each pattern from a single call rather than chaining
+<code>diagnosePickPackage</code> → <code>getMovementHistory</code> → <code>getInventoryForItem</code>.</p>
+
+<h2 id="crosscut">7. Cross-cutting: notable solved problems <a class="anchor" href="#crosscut">#</a></h2>
+
+<h3>7.1 pgjdbc 42.7.x rejects <code>java.time.Instant</code> (commit <code>ad11626</code>)</h3>
+
+<p><strong>Symptom.</strong> Every diagnose call against a non-trivial PP failed with
+<code>bad SQL grammar</code> — actual cause <code>conversion to class java.time.Instant
+from timestamp[tz] not supported</code>.</p>
+
+<p><strong>Cause.</strong> pgjdbc deliberately doesn't support <code>getObject(idx, Instant.class)</code>
+or <code>setObject(idx, Instant)</code>. Spring's stock <code>SimplePropertyRowMapper</code>
+calls the read variant.</p>
+
+<p><strong>Fix.</strong> Custom <code>RecordRowMapper</code> (in <code>repository/support/</code>) that intercepts
+<code>Instant</code> components and reads via the supported path: <code>OffsetDateTime</code> for
+tz-aware columns, <code>Timestamp</code> with a UTC <code>Calendar</code> for tz-less columns
+(matches Hibernate's UTC-write convention on the upstream services). All
+30+ <code>.query(SomeRecord.class)</code> call sites were wrapped in
+<code>RecordRowMapper.of(...)</code>. One Instant-bind site converted to
+<code>OffsetDateTime</code>. Six unit tests pin the read path so re-introduction of
+the bug fails fast in CI.</p>
+
+<h3>7.2 RESTRICTED stock = paired non-distribution warehouse (commit <code>26937c0</code>)</h3>
+
+<p><strong>Symptom.</strong> <code>getInventoryForItem</code> returned RESTRICTED rows under
+<code>siteCode=MAR-0000000001</code> with no hint of where the stock physically sat.</p>
+
+<p><strong>Cause.</strong> Stockholm's <code>WarehouseService.getStockIndicatorForWarehouse</code> folds
+the sibling-warehouse code into <code>(parent, RESTRICTED)</code> before sending
+<code>UpdateStockWebRequest</code> to warehouse-inventory. So a RESTRICTED row under
+<code>MAR-0000000001</code> is actually stock at <code>MAN-0000000002</code> ("Marunda Non Dist").</p>
+
+<p><strong>Fix.</strong> New <code>WarehouseDefectMapRepository</code> lazy-loads the
+parent ↔ defect mapping from stockholm and caches in memory.
+<code>InventoryForItemEvidence.WarehouseItemMaster</code> gained a <code>physicalWarehouseCode</code>
+field that resolves to the actual stockholm warehouse the stock lives in.</p>
+
+<h3>7.3 Eligible-picker freshness (commit <code>26fae99</code>)</h3>
+
+<p><strong>Symptom.</strong> <code>breakdown: avail=0 busy=155 offline=324</code> answered "no AVAILABLE
+picker right now" but didn't show whether OFFLINE pickers had logged off
+5 minutes ago (back soon) or 8 days ago (stale pool, not coming back).</p>
+
+<p><strong>Fix.</strong> Two new fields on every <code>PickListAllocation</code> and <code>SourceAreaCoverage</code>:</p>
+<ul>
+  <li><code>PickerStatusFreshness</code> — 4-bucket histogram of OFFLINE pickers by <code>now − last_login_time</code>.</li>
+  <li><code>recentlyOnlinePickers</code> — top-5 OFFLINE pickers sorted by <code>last_login_time</code> DESC, with pre-computed <code>minutesSinceLastLogin</code>.</li>
+</ul>
+<p>Computed in-memory from the existing <code>findEligiblePickersForZones</code> result —
+no extra DB roundtrip. The agent now distinguishes "wait 15 min, someone's
+on break" from "this zone is structurally short-staffed".</p>
+
+<h2 id="deployment">8. Deployment &amp; runtime <a class="anchor" href="#deployment">#</a></h2>
+
+<h3>Runtime topology (current)</h3>
+<pre>┌─────────────────────────────────────────────────┐
+│  Local dev laptop                               │
+│                                                 │
+│  Java 21 (OpenJDK 25 also tested)               │
+│  Spring Boot embedded Tomcat on :8081           │
+│  Started via `mvn spring-boot:run`              │
+│                                                 │
+│  Env vars (passwords only):                     │
+│    STOCKHOLM_DB_PASSWORD                        │
+│    INVENTORY_DB_USER  + _PASSWORD               │
+│    MOVEMENT_DB_USER   + _PASSWORD               │
+└─────────────────────────────────────────────────┘
+                      │
+                      ▼  TLS-less direct (corp network)
+       jdbc:postgresql://central-postgres13-{01,02}.qa2-sg.cld:5432
+                                  ?targetServerType=master&amp;ApplicationName=opsvision-mcp
+</pre>
+
+<h3>Configuration model</h3>
+<ul>
+  <li><strong>Static config</strong> (<code>application.yml</code>): URL templates, pool sizes, init-SQL, log levels, MCP server name/version. Committed.</li>
+  <li><strong>Secrets</strong> (env vars): only the DB passwords. Never written to disk in this repo.</li>
+  <li><strong>No profiles</strong>: default profile only. <code>application-local.yml.example</code> exists for reference but is not loaded.</li>
+</ul>
+
+<h3>Health &amp; observability</h3>
+<ul>
+  <li>Spring Boot Actuator endpoints: <code>/actuator/health</code>, <code>/info</code>, <code>/metrics</code>. Exposed on the same port (<code>:8081/actuator</code>).</li>
+  <li>Hikari emits pool-stat metrics; HikariCP-7 housekeeper warnings (<code>thread starvation</code>) appear after laptop sleep events but recover on next request.</li>
+  <li><code>org.springframework.ai.mcp</code> set to INFO; <code>com.gdn.opsvision</code> to DEBUG.</li>
+</ul>
+
+<h3>MCP protocol detail</h3>
+<ul>
+  <li><strong>Transport</strong>: Streamable HTTP (single endpoint <code>/mcp</code> accepts POST with <code>Mcp-Session-Id</code> header; SSE for streamed responses).</li>
+  <li><strong>Protocol version</strong>: server negotiates whatever the client offers — verified against <code>2025-03-26</code> and <code>2025-11-25</code> (current and prior MCP spec versions).</li>
+  <li><strong>Capabilities advertised</strong>: <code>tools.listChanged</code>, <code>resources</code>, <code>prompts</code>, <code>completions</code>, <code>logging</code>.</li>
+  <li><strong>Sync mode</strong> (<code>spring.ai.mcp.server.type: SYNC</code>): each tool method runs synchronously on a Tomcat servlet thread.</li>
+  <li><strong>Tool input validation</strong>: Spring AI's <code>ToolInputValidator</code> enforces the JSON-schema derived from <code>@ToolParam</code> annotations on every call. Unknown parameter names and missing required parameters are rejected before the method runs (e.g. calling <code>diagnosePickPackage</code> with <code>pickPackageCode</code> instead of <code>idOrCode</code> returns <em>"property 'pickPackageCode' is not defined in the schema"</em> without touching the database).</li>
+  <li><strong>Error contract</strong>: any uncaught exception thrown by a tool method is serialised into an MCP tool-result envelope with <code>isError:true</code> and the exception message as the <code>text</code> content. Database errors, validation errors, and not-found scenarios all share this envelope. The agent sees a structured error, not an HTTP 5xx.</li>
+</ul>
+
+<h2 id="testing">9. Testing strategy <a class="anchor" href="#testing">#</a></h2>
+
+<p>The project has 65 tests in 11 test classes.</p>
+
+<table>
+<tr><th>Layer</th><th>Test class</th><th>Style</th></tr>
+<tr><td><strong>DTO / lifecycle</strong></td><td><code>*LifecycleStageTest</code> × 7</td><td>Pure-Java enum coverage (every status string maps; reflective tests)</td></tr>
+<tr><td><strong>Tool signal logic</strong></td><td><code>DiagnosePickPackageToolSignalsTest</code>, <code>DiagnosePickerQueueToolSignalsTest</code></td><td>Fixture-based; mocks the rows, asserts derived signals + SignalKind classification</td></tr>
+<tr><td><strong>Row mapping</strong></td><td><code>RecordRowMapperTest</code></td><td>Mockito on <code>ResultSet</code>; pins the Instant-read paths so the pgjdbc bug can't sneak back</td></tr>
+<tr><td><strong>DB read-only enforcement</strong></td><td><code>ReadOnlyEnforcementTest</code></td><td><code>@SpringBootTest</code>; opens real connections; sends <code>UPDATE</code>; asserts SQLState <code>25006</code> or perm-denied</td></tr>
+</table>
+
+<p>The read-only test is gated on env vars being present, so CI without DB
+credentials skips it; local development with creds always runs it.</p>
+
+<p>There are <strong>no end-to-end MCP tests</strong> today — verification is currently
+manual via <code>curl</code> against the running server.</p>
+
+<h2 id="decisions">10. Key design decisions <a class="anchor" href="#decisions">#</a></h2>
+
+<table>
+<tr><th>Decision</th><th>Rationale</th><th>Trade-off</th></tr>
+<tr><td><strong>JdbcClient over JPA / Hibernate</strong></td><td>The schemas are stable, queries are inherently warehouse-domain-specific, and we never write. Hand-written SQL is more readable than entity-graph configuration.</td><td>More boilerplate per query; no second-level cache.</td></tr>
+<tr><td><strong>One repo per logical concern, not per table</strong></td><td>Repos compose multi-table queries that match the SCPS investigation flow (<code>PickPackageDiagnosisRepository</code> joins picker, zone, allocation in one place).</td><td>Some repos are large (300+ lines); offset by row-shaped intermediate records.</td></tr>
+<tr><td><strong>Three independent DataSources</strong></td><td>Each warehouse-domain DB is owned by a different upstream service. We don't want a connection pool exhausted on one DB to break queries to another.</td><td>3× connection budget; small overhead.</td></tr>
+<tr><td><strong>Evidence-not-verdict philosophy</strong></td><td>Stable surface across operational-policy changes; LLM is the variable, server is the constant.</td><td>Agent prompts must encode policy; verdicts have to live somewhere else.</td></tr>
+<tr><td><strong>Lifecycle enums cite source files</strong></td><td>Future devs (and the agent) can verify the mapping against ground-truth SCPS source.</td><td>Maintenance burden when SCPS adds enum values.</td></tr>
+<tr><td><strong>SignalKind dominance as enum rather than priority list</strong></td><td>Server doesn't commit to a specific priority order; agent picks the lead signal from the kinds it cares about.</td><td>Agent prompts must understand the kind taxonomy.</td></tr>
+<tr><td><strong>Custom RecordRowMapper instead of changing DTO field types</strong></td><td>Public DTO contract stays as <code>Instant</code> (correct semantic); the workaround is contained in one mapper class.</td><td>One more file in the codebase; needs a regression test.</td></tr>
+<tr><td><strong>No structured logging / tracing yet</strong></td><td>Single-tenant, low-volume tool used by one agent at a time today. Premature complexity.</td><td>Will need OTLP / structured logs once observability across agent sessions becomes important.</td></tr>
+</table>
+
+<h2 id="roadmap">11. What's next (roadmap, not promises) <a class="anchor" href="#roadmap">#</a></h2>
+
+<ol>
+  <li><strong>Mirror the freshness/sample fields on <code>diagnosePickerQueue.siblingPickerStatus</code></strong> — same agent-actionable insight, picker-rooted view.</li>
+  <li><strong>Putaway lifecycle enum</strong> — currently blocked on a schema discrepancy (source enum has <code>OPEN/CLOSED</code> but QA2 contains <code>COMPLETED/PUTAWAY_STARTED</code>).</li>
+  <li><strong>Replenishment / IR lifecycle</strong> — blocked on <code>IRStatus</code> mismatch (codes-up-to-17 in DB vs. 12-value enum in source).</li>
+  <li><strong>End-to-end MCP integration test</strong> — hit <code>tools/call</code> over HTTP, assert structured response envelope.</li>
+  <li><strong>Observability</strong> — request tracing with PP/PL ids on the MDC, OTLP export.</li>
+  <li><strong>CI</strong> — currently relies on local <code>mvn test</code>; no GitHub Actions yet.</li>
+</ol>
+
+<h2 id="appendix-a">Appendix A — Module dependency graph <a class="anchor" href="#appendix-a">#</a></h2>
+
+<div class="diagram">
+<pre class="mermaid">
+flowchart TB
+    App["OpsvisionMcpApplication<br/><small>@SpringBootApplication entry</small>"]
+    McpCfg["McpToolsConfig<br/><small>registers 13 @Tool methods</small>"]
+    DSCfg["DataSourcesConfig<br/><small>3× HikariDS · 3× JdbcClient</small>"]
+
+    subgraph T["tool/ — 13 @Service classes"]
+        TFetch["Single-entity fetch<br/><small>getPickPackage · getPickList ·<br/>getSalesOrder · getInventoryForItem</small>"]
+        TDiag["Composite diagnose<br/><small>diagnosePickPackage · diagnosePickerQueue ·<br/>evaluatePickListReadiness · reconcileInventoryVsReservation</small>"]
+        TLedger["Lifecycle ledgers<br/><small>getMovementHistory · getStockHistoryForItem ·<br/>getStockTrace</small>"]
+        TSearch["Bulk search<br/><small>findPickingTasks · findPickingTaskRequests</small>"]
+    end
+
+    subgraph R["repository/ — 12 @Repository classes"]
+        RStockholm["stockholm-bound<br/><small>PickPackage · PickList · SalesOrder ·<br/>PickerAccess · PickPackageDiagnosis ·<br/>StuckRules · WarehouseDefectMap ·<br/>Reconciliation</small>"]
+        RInventory["inventory-bound<br/><small>Inventory · StockHistory</small>"]
+        RMovement["movement-bound<br/><small>Movement · MovementSearch</small>"]
+    end
+
+    DTOs["dto/ — 23 evidence DTOs +<br/>9 lifecycle enums + SignalKind"]
+    Support["repository/support/<br/>RecordRowMapper<br/><small>fixes pgjdbc Instant gap</small>"]
+
+    App --> McpCfg
+    App --> DSCfg
+    McpCfg -. registers .-> T
+    T --> R
+    T --> DTOs
+    R --> Support
+    R --> DSCfg
+    Support --> DSCfg
+
+    classDef default rx:6,ry:6,stroke-width:1.2px;
+</pre>
+<details><summary>Mermaid source</summary><pre>flowchart TB
+    App[OpsvisionMcpApplication]
+    McpCfg[McpToolsConfig]
+    DSCfg[DataSourcesConfig]
+    subgraph T[tool/]
+      TFetch[Single-entity fetch]
+      TDiag[Composite diagnose]
+      TLedger[Lifecycle ledgers]
+      TSearch[Bulk search]
+    end
+    subgraph R[repository/]
+      RStockholm[stockholm-bound]
+      RInventory[inventory-bound]
+      RMovement[movement-bound]
+    end
+    DTOs[dto/ — evidence DTOs + lifecycle enums]
+    Support[RecordRowMapper]
+    App --&gt; McpCfg
+    App --&gt; DSCfg
+    McpCfg -. registers .-&gt; T
+    T --&gt; R
+    T --&gt; DTOs
+    R --&gt; Support
+    R --&gt; DSCfg
+    Support --&gt; DSCfg</pre></details>
+</div>
+
+<h2 id="appendix-b">Appendix B — Tool call cheat-sheet <a class="anchor" href="#appendix-b">#</a></h2>
+
+<pre>diagnosePickPackage(idOrCode)
+  → "Why isn't this PP picked?"  (one call, full evidence pack)
+
+diagnosePickerQueue(pickerCode)
+  → "Why is this picker idle?"    (sibling tool to the above)
+
+evaluatePickListReadiness(idOrCode)
+  → "Is this PP truly stuck per the 13-rule support checklist?"
+
+reconcileInventoryVsReservation(idOrCode)
+  → "Does the picking demand line up with available stock?"
+
+getMovementHistory(idOrCode)
+  → "Full WCS picking-task ledger for this PP."
+
+getStockTrace(stockTraceId)
+  → "Follow one stock_trace_id end-to-end across DBs."
+
+getPickPackage / getPickList / getSalesOrder / getInventoryForItem
+  → Single-entity deep snapshots.
+
+findPickingTasks / findPickingTaskRequests
+  → Bulk filtered search (status, time window, picker, sku, …).
+
+getStockHistoryForItem
+  → Windowed stock_history for one (skuCode, siteCode).
+</pre>
+
+<footer>
+  Generated 2026-05-07 · Code-of-record commit <code>26fae99</code>.
+</footer>
+
+</div>
+</body>
+</html>

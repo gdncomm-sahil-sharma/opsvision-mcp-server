@@ -1,0 +1,132 @@
+%% OpsVision MCP Server — Architecture diagrams (Mermaid sources)
+%%
+%% Each block below is a separate diagram. To render one:
+%%   1. Copy a single block (between the section banners) into mermaid.live
+%%   2. Or feed to the Mermaid CLI: mmdc -i fragment.mmd -o fragment.svg
+%%
+%% These match the diagrams embedded in docs/architecture.html. The HTML uses
+%% the Mermaid CDN (jsdelivr.net/npm/mermaid@11) — open the .html in a browser
+%% and the diagrams render automatically.
+%%
+%% Generated 2026-05-07 · code-of-record commit 26fae99
+
+
+%% ─── 1. System context ──────────────────────────────────────────────────────
+flowchart TB
+    Agent["Operations / Support Agent<br/><small>(LLM running on harness)</small>"]:::agent
+
+    subgraph Server["opsvision-mcp-server (this repo)"]
+        direction TB
+        Tools["Tool layer<br/><small>13 @Tool methods</small>"]
+        Repos["Repository layer<br/><small>12 repositories</small>"]
+        JDBC["JdbcClient × 3<br/><small>Hikari pools</small>"]
+        Tools --> Repos --> JDBC
+    end
+
+    subgraph DBs["PostgreSQL 13 — read replicas in QA2"]
+        direction LR
+        Stockholm[("stockholm_marunda_restore<br/><small>DB 413 · pick_package · sales_order ·<br/>picker · pick_list · packing_order</small>")]
+        Inventory[("warehouse_inventory_marunda<br/><small>DB 417 · warehouse_item_master · bin ·<br/>stock_history</small>")]
+        Movement[("warehouse_stock_movement_marunda<br/><small>DB 416 · picking_task ·<br/>picking_task_request</small>")]
+    end
+
+    Agent -- "MCP / JSON-RPC 2.0<br/>over Streamable HTTP" --> Server
+    JDBC --> Stockholm
+    JDBC --> Inventory
+    JDBC --> Movement
+
+    classDef agent fill:#fff8c5,stroke:#9a6700,stroke-width:1.5px;
+    classDef default rx:6,ry:6;
+
+
+%% ─── 2. High-level four-layer architecture ──────────────────────────────────
+flowchart TB
+    L1["<b>Transport</b><br/>spring-ai-starter-mcp-server-webmvc<br/><small>MCP 2025-03-26 over Streamable HTTP · :8081/mcp</small>"]
+    L2["<b>Tool layer · 13 @Tool methods · McpToolsConfig</b><br/><small>Composes evidence packs · runs pure-Java derivations<br/>(lifecycle stages · boolean signals · queue-rank · freshness)</small>"]
+    L3["<b>Repository layer · 12 @Repository classes</b><br/><small>JdbcClient + named-param SQL + custom RecordRowMapper<br/>@Transactional(readOnly = true) on every method</small>"]
+    L4["<b>DataSource layer · DataSourcesConfig · 3 Hikari pools</b><br/><small>stockholmJdbcClient · inventoryJdbcClient · movementJdbcClient<br/>read-only · 5 conns · init-SQL: SET default_transaction_read_only = on</small>"]
+    L5[("PostgreSQL 13 · 3 databases · multi-host failover URL<br/><small>central-postgres13-{01,02}.qa2-sg.cld:5432 · targetServerType=master</small>")]
+    L1 --> L2 --> L3 --> L4 --> L5
+
+    classDef default rx:8,ry:8,stroke-width:1.2px;
+
+
+%% ─── 3. Cross-DB stitching keys ─────────────────────────────────────────────
+flowchart LR
+    subgraph S["stockholm_marunda_restore"]
+        S_so["sales_order"]
+        S_pi["picking_item<br/><small>stock_trace_id</small>"]
+        S_pl["pick_list /<br/>pick_list_details"]
+    end
+
+    subgraph I["warehouse_inventory_marunda"]
+        I_wim["warehouse_item_master<br/><small>(warehouse, item)</small>"]
+        I_sh["stock_history<br/><small>stock_trace_id · item.code</small>"]
+    end
+
+    subgraph M["warehouse_stock_movement_marunda"]
+        M_pt["picking_task<br/><small>stock_trace_id · sku_code</small>"]
+        M_ptr["picking_task_request"]
+    end
+
+    S_pi -- "stock_trace_id (UUID)" --- I_sh
+    S_pi -- "stock_trace_id (UUID)" --- M_pt
+    I_wim -. "item.code (SKU)" .- M_pt
+    I_wim -. "item.code (SKU)" .- S_pi
+
+    classDef default rx:6,ry:6;
+
+
+%% ─── 4. SignalKind dominance hierarchy ──────────────────────────────────────
+flowchart TB
+    A["<b>OPERATOR_OVERRIDE</b><br/><small>Operator-set, dominates state</small><br/><small>e.g. isRejected · isInactive</small>"]:::override
+    B1["<b>BLOCKER_EXTERNAL</b><br/><small>Waiting on upstream system</small><br/><small>e.g. isStorageNotAvailable</small>"]:::blocker
+    B2["<b>BLOCKER_INTERNAL</b><br/><small>Capacity / configuration limit</small><br/><small>e.g. hasEligiblePickersButNoneAvailable</small>"]:::blocker
+    S["<b>STAGE</b><br/><small>Lifecycle state of the artefact</small><br/><small>e.g. isReadyForManualPicking · isPartialPackage</small>"]:::stage
+    C["<b>CONTEXT</b><br/><small>Background fact, never the headline</small><br/><small>e.g. isInBatchOrWave · hasMultipleSourceAreas</small>"]:::context
+
+    A == "dominates" ==> B1
+    A == "dominates" ==> B2
+    B1 == "dominates" ==> S
+    B2 == "dominates" ==> S
+    S == "dominates" ==> C
+
+    classDef override fill:#ffebe9,stroke:#cf222e,color:#82071e,stroke-width:1.5px;
+    classDef blocker  fill:#fff8c5,stroke:#bf8700,color:#633c01,stroke-width:1.5px;
+    classDef stage    fill:#dafbe1,stroke:#1a7f37,color:#0a3622,stroke-width:1.5px;
+    classDef context  fill:#eaeef2,stroke:#6e7781,color:#24292f,stroke-width:1.5px;
+    classDef default  rx:6,ry:6;
+
+
+%% ─── 5. Module dependency graph ─────────────────────────────────────────────
+flowchart TB
+    App["OpsvisionMcpApplication<br/><small>@SpringBootApplication entry</small>"]
+    McpCfg["McpToolsConfig<br/><small>registers 13 @Tool methods</small>"]
+    DSCfg["DataSourcesConfig<br/><small>3× HikariDS · 3× JdbcClient</small>"]
+
+    subgraph T["tool/ — 13 @Service classes"]
+        TFetch["Single-entity fetch<br/><small>getPickPackage · getPickList ·<br/>getSalesOrder · getInventoryForItem</small>"]
+        TDiag["Composite diagnose<br/><small>diagnosePickPackage · diagnosePickerQueue ·<br/>evaluatePickListReadiness · reconcileInventoryVsReservation</small>"]
+        TLedger["Lifecycle ledgers<br/><small>getMovementHistory · getStockHistoryForItem ·<br/>getStockTrace</small>"]
+        TSearch["Bulk search<br/><small>findPickingTasks · findPickingTaskRequests</small>"]
+    end
+
+    subgraph R["repository/ — 12 @Repository classes"]
+        RStockholm["stockholm-bound<br/><small>PickPackage · PickList · SalesOrder ·<br/>PickerAccess · PickPackageDiagnosis ·<br/>StuckRules · WarehouseDefectMap ·<br/>Reconciliation</small>"]
+        RInventory["inventory-bound<br/><small>Inventory · StockHistory</small>"]
+        RMovement["movement-bound<br/><small>Movement · MovementSearch</small>"]
+    end
+
+    DTOs["dto/ — 23 evidence DTOs +<br/>9 lifecycle enums + SignalKind"]
+    Support["repository/support/<br/>RecordRowMapper<br/><small>fixes pgjdbc Instant gap</small>"]
+
+    App --> McpCfg
+    App --> DSCfg
+    McpCfg -. registers .-> T
+    T --> R
+    T --> DTOs
+    R --> Support
+    R --> DSCfg
+    Support --> DSCfg
+
+    classDef default rx:6,ry:6,stroke-width:1.2px;
