@@ -2,6 +2,7 @@ package com.gdn.opsvision.mcp.repository;
 
 import com.gdn.opsvision.mcp.repository.support.RecordRowMapper;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -90,5 +91,41 @@ public class SalesOrderRepository {
             Integer quantity,
             Integer currentPickedQuantity,
             String stockTraceId) {
+    }
+
+    // ─── aggregateSalesOrdersByStatus: status histogram for ops dashboards ───────
+
+    /**
+     * Histogram of sales_order rows grouped by {@code last_status}, optionally scoped to a
+     * site (warehouse code), a {@code last_process_date} window, and/or a single
+     * {@code last_status} ordinal. All three filters are optional and AND-combine.
+     *
+     * <p>{@code last_process_date} is the SO-level update timestamp ({@code timestamp without
+     * time zone} in postgres). Bind {@link LocalDateTime} for the window bounds, same as
+     * {@code stock_history} queries.
+     */
+    public List<StatusCountRow> aggregateByStatus(
+            String siteCode, LocalDateTime since, LocalDateTime until, Integer lastStatus) {
+        return stockholm.sql("""
+                        SELECT so.last_status,
+                               count(*) AS so_count
+                          FROM sales_order so
+                          LEFT JOIN warehouse w ON w.id = so.warehouse
+                         WHERE (CAST(:site AS varchar) IS NULL OR w.code = :site)
+                           AND (CAST(:since AS timestamp) IS NULL OR so.last_process_date >= :since)
+                           AND (CAST(:until AS timestamp) IS NULL OR so.last_process_date <  :until)
+                           AND (CAST(:status AS int) IS NULL OR so.last_status = :status)
+                         GROUP BY so.last_status
+                         ORDER BY so_count DESC, so.last_status
+                        """)
+                .param("site", siteCode)
+                .param("since", since)
+                .param("until", until)
+                .param("status", lastStatus)
+                .query(RecordRowMapper.of(StatusCountRow.class))
+                .list();
+    }
+
+    public record StatusCountRow(int lastStatus, long soCount) {
     }
 }

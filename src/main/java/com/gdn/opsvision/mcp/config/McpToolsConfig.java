@@ -5,6 +5,7 @@ import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.gdn.opsvision.mcp.tool.AggregateSalesOrdersByStatusTool;
 import com.gdn.opsvision.mcp.tool.DiagnosePickPackageTool;
 import com.gdn.opsvision.mcp.tool.DiagnosePickerQueueTool;
 import com.gdn.opsvision.mcp.tool.FindPickPackagesTool;
@@ -48,7 +49,8 @@ public class McpToolsConfig {
             GetSalesOrderTool getSalesOrderTool,
             GetStockHistoryForItemTool getStockHistoryForItemTool,
             DiagnosePickPackageTool diagnosePickPackageTool,
-            DiagnosePickerQueueTool diagnosePickerQueueTool) {
+            DiagnosePickerQueueTool diagnosePickerQueueTool,
+            AggregateSalesOrdersByStatusTool aggregateSalesOrdersByStatusTool) {
         return MethodToolCallbackProvider.builder()
                 .toolObjects(pickPackageTool, pickListTool, pickListReadinessTool,
                         inventoryForItemTool, reconciliationTool, stockTraceTool,
@@ -58,7 +60,8 @@ public class McpToolsConfig {
                         findReservationDriftHotspotsTool,
                         findStockDiscrepancyOriginTool,
                         getSalesOrderTool, getStockHistoryForItemTool,
-                        diagnosePickPackageTool, diagnosePickerQueueTool)
+                        diagnosePickPackageTool, diagnosePickerQueueTool,
+                        aggregateSalesOrdersByStatusTool)
                 .build();
     }
 }
