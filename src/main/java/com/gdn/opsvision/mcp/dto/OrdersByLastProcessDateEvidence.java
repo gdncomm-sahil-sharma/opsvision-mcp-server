@@ -24,8 +24,8 @@ import java.util.List;
  */
 public record OrdersByLastProcessDateEvidence(
         String siteCode,
-        String windowStart,
-        String windowEnd,
+        String sinceDate,
+        String untilDate,
         String bucketBy,
         int sampleSize,
         Section activeSnapshot,

@@ -48,51 +48,53 @@ public class FindOrdersByLastProcessDateTool {
                                  now?", "how many are STOCK_RESERVED at MAR?".
               terminalInWindow - SOs that reached a terminal status (CANCELLED, \
                                  ITEM_ISSUED, REJECTED, OUT_OF_STOCK_CANCEL) inside \
-                                 [lastProcessDateFrom, lastProcessDateTo) judged by \
+                                 [sinceDate, untilDate) judged by \
                                  sales_order.last_process_date. Answers "what shipped \
                                  today?", "how many cancelled this week?".
 
             Each bucket carries up to sampleSize most-recent orderItemIds for drill-down \
             via getSalesOrder.
 
+            For a flat histogram across ALL statuses without the active/terminal split \
+            and without drill-down samples, use aggregateSalesOrdersByStatus.
+
             Inputs:
-              siteCode             required, warehouse.code (e.g. 'MAR-0000000001').
-              lastProcessDateFrom  required for the terminal-in-window section. ISO date \
-                                   ('YYYY-MM-DD' = start of day) or datetime \
-                                   ('YYYY-MM-DDTHH:MM:SS' = inclusive moment).
-              lastProcessDateTo    optional upper bound. ISO date (= exclusive next-day) \
-                                   or datetime (= exclusive moment). For "today only", \
-                                   pass the same date as lastProcessDateFrom. Omit to \
-                                   leave the window open-ended on the upper side.
-              bucketBy             'status' (default) — one bucket per SOStatus label \
-                                   (e.g. ITEM_PICKED, OUT_OF_STOCK, PICK_PACKAGE_CREATED).
-                                   'lifecycleStage' — coarse roll-up by \
-                                   SalesOrderLifecycleStage (PRE_FULFILLMENT, \
-                                   IN_FULFILLMENT, POST_PICK, TERMINATED, etc.). The \
-                                   bucket label maps directly to the stage name.
-              sampleSize           default 3, max 50. Per-bucket cap on the drill-down \
-                                   orderItemIds list. Samples are ordered most-recent \
-                                   first by last_process_date.
+              siteCode    required, warehouse.code (e.g. 'MAR-0000000001').
+              sinceDate   required for the terminal-in-window section. ISO date \
+                          ('YYYY-MM-DD' = start of day) or datetime \
+                          ('YYYY-MM-DDTHH:MM:SS' = inclusive moment).
+              untilDate   optional upper bound. ISO date (= exclusive next-day) or \
+                          datetime (= exclusive moment). For "today only", pass the \
+                          same date as sinceDate. Omit to leave the window open-ended \
+                          on the upper side.
+              bucketBy    'status' (default) — one bucket per SOStatus label (e.g. \
+                          ITEM_PICKED, OUT_OF_STOCK, PICK_PACKAGE_CREATED).
+                          'lifecycleStage' — coarse roll-up by SalesOrderLifecycleStage \
+                          (PRE_FULFILLMENT, IN_FULFILLMENT, POST_PICK, TERMINATED, \
+                          etc.). The bucket label maps directly to the stage name.
+              sampleSize  default 3, max 50. Per-bucket cap on the drill-down \
+                          orderItemIds list. Samples are ordered most-recent first by \
+                          last_process_date.
 
             Date semantics: the window applies ONLY to terminalInWindow. activeSnapshot \
-            is always live. lastProcessDateTo defaults to "no upper bound" when omitted.
+            is always live. untilDate defaults to "no upper bound" when omitted.
 
             Returns FACTS, not VERDICTS. The agent reads each section and decides what \
             the distribution means.
             """)
     public OrdersByLastProcessDateEvidence findOrdersByLastProcessDate(
             @ToolParam(description = "Site / warehouse code (e.g. 'MAR-0000000001')") String siteCode,
-            @ToolParam(description = "Lower bound on last_process_date for the terminalInWindow section. ISO date (YYYY-MM-DD = start of day) or datetime (YYYY-MM-DDTHH:MM:SS = inclusive moment).") String lastProcessDateFrom,
-            @ToolParam(description = "Optional upper bound on last_process_date. ISO date (exclusive next-day) or datetime (exclusive moment). Omit for no upper bound.", required = false) String lastProcessDateTo,
+            @ToolParam(description = "Lower bound on last_process_date for the terminalInWindow section. ISO date (YYYY-MM-DD = start of day) or datetime (YYYY-MM-DDTHH:MM:SS = inclusive moment).") String sinceDate,
+            @ToolParam(description = "Optional upper bound on last_process_date. ISO date (exclusive next-day) or datetime (exclusive moment). Omit for no upper bound.", required = false) String untilDate,
             @ToolParam(description = "Bucketing dimension: 'status' (default) for one bucket per SOStatus label, or 'lifecycleStage' for coarse SalesOrderLifecycleStage roll-up.", required = false) String bucketBy,
             @ToolParam(description = "Per-bucket cap on drill-down orderItemIds (default 3, max 50).", required = false) Integer sampleSize) {
 
         String effectiveBucketBy = resolveBucketBy(bucketBy);
         int effectiveSampleSize = clampSampleSize(sampleSize);
-        LocalDateTime since = IsoBound.parseSince(lastProcessDateFrom);
-        LocalDateTime until = lastProcessDateTo == null || lastProcessDateTo.isBlank()
+        LocalDateTime since = IsoBound.parseSince(sinceDate);
+        LocalDateTime until = untilDate == null || untilDate.isBlank()
                 ? LocalDateTime.of(9999, 12, 31, 0, 0)
-                : IsoBound.parseUntil(lastProcessDateTo);
+                : IsoBound.parseUntil(untilDate);
 
         List<StatusBucketWithSamplesRow> activeRows = repo.findActiveSnapshotByStatus(
                 siteCode, effectiveSampleSize);
@@ -104,8 +106,8 @@ public class FindOrdersByLastProcessDateTool {
 
         return new OrdersByLastProcessDateEvidence(
                 siteCode,
-                lastProcessDateFrom,
-                lastProcessDateTo,
+                sinceDate,
+                untilDate,
                 effectiveBucketBy,
                 effectiveSampleSize,
                 activeSnapshot,

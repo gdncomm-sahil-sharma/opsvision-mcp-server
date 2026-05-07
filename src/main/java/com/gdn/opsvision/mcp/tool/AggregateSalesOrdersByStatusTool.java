@@ -45,6 +45,12 @@ public class AggregateSalesOrdersByStatusTool {
             now?", "how many were ITEM_PICKED today?", "what's the active vs \
             terminated breakdown over the last hour?".
 
+            For an operator-dashboard view that splits SOs into active-snapshot \
+            (currently-pending) vs terminal-in-window (shipped/cancelled in window) \
+            sections, with up to N drill-down orderItemIds per bucket, use \
+            findOrdersByLastProcessDate. This tool is the simpler raw-histogram \
+            interface — same date filter applies to ALL buckets uniformly.
+
             All filters are optional and AND-combine:
               siteCode      - warehouse.code (e.g. 'MAR-0000000001'). Omit to \
                               count across all sites.

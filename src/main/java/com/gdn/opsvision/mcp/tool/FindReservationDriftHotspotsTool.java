@@ -54,14 +54,18 @@ public class FindReservationDriftHotspotsTool {
             meets the threshold. Sorted by absoluteTotalDrift DESC so the worst \
             offenders lead.
 
+            DISAMBIGUATION vs findStockDiscrepancyOrigin: that tool is per-SKU \
+            forensic that catches per-trace asymmetry on ORIGINAL stock only — use \
+            it once you know which SKU to investigate, to identify WHICH events \
+            caused the leak. THIS tool is site-wide, scans all WIMs in one call, \
+            and is the only way to enumerate the larger RESERVED-side drift — use \
+            it to identify WHICH SKUs to investigate first.
+
             Use this for "is anything wrong at site X?" triage and for surfacing \
             SKUs with the classic SCPS phantom-reservation leak — pick events \
             decremented the bin-side reservation but the WIM-aggregate never \
             closed back, causing future PP creations to allocate against bins \
-            that no longer hold the stock and short-pick. Note that \
-            findStockDiscrepancyOrigin only catches per-trace asymmetry on \
-            ORIGINAL stock; this tool is the only way to enumerate the larger \
-            RESERVED-side drift across a site.
+            that no longer hold the stock and short-pick.
 
             Divergence sign convention (WIM aggregate − sum of bins):
               +N  WIM aggregate is HIGHER than bin sum by N (typical leak: WIM \
