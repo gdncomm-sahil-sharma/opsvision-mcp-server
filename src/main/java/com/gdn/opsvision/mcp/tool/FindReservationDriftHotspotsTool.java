@@ -95,7 +95,8 @@ public class FindReservationDriftHotspotsTool {
             @ToolParam(description = "Site / warehouse code (e.g. 'MAR-0000000001')") String siteCode,
             @ToolParam(description = "Optional ISO bound on stock_history.created_date (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS) — restricts to WIMs with activity in [sinceDate, now)", required = false) String sinceDate,
             @ToolParam(description = "Minimum absoluteTotalDrift for a WIM to be included (default 1). Set higher to ignore single-unit noise.", required = false) Integer minAbsoluteDrift,
-            @ToolParam(description = "Max hotspots to return (default 50, capped at 200)", required = false) Integer limit) {
+            @ToolParam(description = "Max hotspots to return (default 50, capped at 200)", required = false) Integer limit,
+            @ToolParam(description = "Optional supplier.code to narrow the scan to a single supplier's WIMs. Useful for CONSIGNMENT_TRADING-heavy investigations.", required = false) String supplierCode) {
 
         int effectiveLimit = clampLimit(limit);
         int effectiveMinDrift = clampMinDrift(minAbsoluteDrift);
@@ -103,14 +104,14 @@ public class FindReservationDriftHotspotsTool {
         String defectCode = defectMapRepo.defectCodeFor(siteCode).orElse(null);
 
         List<DriftHotspotRow> rows = stockHistoryRepo.findReservationDriftHotspotsAtSite(
-                siteCode, since, effectiveMinDrift, effectiveLimit + 1);
+                siteCode, since, effectiveMinDrift, effectiveLimit + 1, supplierCode);
         boolean truncated = rows.size() > effectiveLimit;
         if (truncated) {
             rows = rows.subList(0, effectiveLimit);
         }
 
         DriftSummaryRow summaryRow = stockHistoryRepo.findReservationDriftSummaryAtSite(
-                siteCode, since, effectiveMinDrift);
+                siteCode, since, effectiveMinDrift, supplierCode);
 
         List<DriftHotspot> hotspots = new ArrayList<>(rows.size());
         for (DriftHotspotRow r : rows) {
@@ -122,6 +123,8 @@ public class FindReservationDriftHotspotsTool {
                     r.skuCode(),
                     r.stockIndicator(),
                     physicalWarehouseCode,
+                    r.supplierId(),
+                    r.supplierCode(),
                     r.aggregateOriginalQty(),
                     r.binSumOriginalQty(),
                     r.originalDivergence(),

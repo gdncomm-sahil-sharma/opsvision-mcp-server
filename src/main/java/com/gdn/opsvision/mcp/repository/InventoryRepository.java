@@ -50,22 +50,40 @@ public class InventoryRepository {
      */
     public List<WarehouseItemMaster> findStockForItem(String skuCode, String siteCode,
             String restrictedSiblingCode) {
+        return findStockForItem(skuCode, siteCode, restrictedSiblingCode, null);
+    }
+
+    /**
+     * Variant accepting an optional {@code supplierCode} filter (matched against
+     * {@code supplier.code}). Useful for CONSIGNMENT_TRADING SKUs where the same
+     * (warehouse, item) maps to multiple WIM rows distinguished by supplier; for
+     * TRADING SKUs the filter is a no-op (all rows have a single supplier or none).
+     * Pass {@code null} or blank to skip the filter.
+     */
+    public List<WarehouseItemMaster> findStockForItem(String skuCode, String siteCode,
+            String restrictedSiblingCode, String supplierCode) {
+        String supplier = (supplierCode == null || supplierCode.isBlank()) ? null : supplierCode;
         List<WimRollup> rollups = inventory.sql("""
                         SELECT wim.id AS wim_id,
                                wim.stock_indicator,
                                wim.stock_type,
-                               pos.quantity AS aggregate_original_qty,
-                               prs.quantity AS aggregate_reserved_qty
+                               wim.supplier   AS supplier_id,
+                               s.code         AS supplier_code,
+                               pos.quantity   AS aggregate_original_qty,
+                               prs.quantity   AS aggregate_reserved_qty
                         FROM warehouse_item_master wim
                         JOIN warehouse w ON w.id = wim.warehouse
                         JOIN item i ON i.id = wim.item
+                        LEFT JOIN supplier s ON s.id = wim.supplier
                         LEFT JOIN warehouse_physical_original_stock pos ON pos.warehouse_item_master = wim.id
                         LEFT JOIN warehouse_physical_reserved_stock  prs ON prs.warehouse_item_master = wim.id
                         WHERE w.code = :site AND i.code = :sku
+                          AND (CAST(:supplier AS varchar) IS NULL OR s.code = :supplier)
                         ORDER BY wim.id
                         """)
                 .param("site", siteCode)
                 .param("sku", skuCode)
+                .param("supplier", supplier)
                 .query(RecordRowMapper.of(WimRollup.class))
                 .list();
 
@@ -99,6 +117,8 @@ public class InventoryRepository {
                     r.stockIndicator(),
                     physicalWarehouseCode,
                     r.stockType(),
+                    r.supplierId(),
+                    r.supplierCode(),
                     aggOrig,
                     aggResv,
                     aggAvailable,
@@ -145,22 +165,33 @@ public class InventoryRepository {
      * the SKU isn't onboarded at the site.
      */
     public List<WimRef> findWimsBySkuAndSite(String skuCode, String siteCode) {
+        return findWimsBySkuAndSite(skuCode, siteCode, null);
+    }
+
+    /** Variant with optional {@code supplierCode} filter — see {@link #findStockForItem}. */
+    public List<WimRef> findWimsBySkuAndSite(String skuCode, String siteCode, String supplierCode) {
+        String supplier = (supplierCode == null || supplierCode.isBlank()) ? null : supplierCode;
         return inventory.sql("""
                         SELECT wim.id              AS wim_id,
-                               wim.stock_indicator
+                               wim.stock_indicator,
+                               wim.supplier        AS supplier_id,
+                               s.code              AS supplier_code
                           FROM warehouse_item_master wim
                           JOIN warehouse w ON w.id = wim.warehouse
                           JOIN item      i ON i.id = wim.item
+                          LEFT JOIN supplier s ON s.id = wim.supplier
                          WHERE w.code = :site AND i.code = :sku
+                           AND (CAST(:supplier AS varchar) IS NULL OR s.code = :supplier)
                          ORDER BY wim.id
                         """)
                 .param("site", siteCode)
                 .param("sku", skuCode)
+                .param("supplier", supplier)
                 .query(RecordRowMapper.of(WimRef.class))
                 .list();
     }
 
-    public record WimRef(long wimId, String stockIndicator) {
+    public record WimRef(long wimId, String stockIndicator, Long supplierId, String supplierCode) {
     }
 
     private Map<Long, List<BinRow>> fetchBinsForWims(List<Long> wimIds) {
@@ -197,6 +228,8 @@ public class InventoryRepository {
             long wimId,
             String stockIndicator,
             String stockType,
+            Long supplierId,
+            String supplierCode,
             Integer aggregateOriginalQty,
             Integer aggregateReservedQty) {
     }

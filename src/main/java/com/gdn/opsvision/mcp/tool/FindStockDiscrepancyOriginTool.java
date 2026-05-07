@@ -92,13 +92,14 @@ public class FindStockDiscrepancyOriginTool {
             @ToolParam(description = "SKU code (item.code)") String skuCode,
             @ToolParam(description = "Site / warehouse code (e.g. 'MAR-0000000001')") String siteCode,
             @ToolParam(description = "Optional ISO bound on stock_history.created_date (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)", required = false) String sinceDate,
-            @ToolParam(description = "Max divergent traces to return per WIM (default 20, capped at 100)", required = false) Integer limit) {
+            @ToolParam(description = "Max divergent traces to return per WIM (default 20, capped at 100)", required = false) Integer limit,
+            @ToolParam(description = "Optional supplier.code to narrow CONSIGNMENT_TRADING SKUs to a single supplier's WIM. No-op for TRADING.", required = false) String supplierCode) {
 
         int effectiveLimit = clampLimit(limit);
         LocalDateTime since = IsoBound.parseSince(sinceDate);
         String defectCode = defectMapRepo.defectCodeFor(siteCode).orElse(null);
 
-        List<WimRef> wims = inventoryRepo.findWimsBySkuAndSite(skuCode, siteCode);
+        List<WimRef> wims = inventoryRepo.findWimsBySkuAndSite(skuCode, siteCode, supplierCode);
         if (wims.isEmpty()) {
             return new StockDiscrepancyOriginEvidence(skuCode, siteCode, false, List.of());
         }
@@ -139,6 +140,7 @@ public class FindStockDiscrepancyOriginTool {
 
         return new WimDiscrepancy(
                 w.wimId(), w.stockIndicator(), physicalWarehouseCode,
+                w.supplierId(), w.supplierCode(),
                 aggCheck, traceRows.size(), truncated, EVENTS_PER_TRACE, traces);
     }
 

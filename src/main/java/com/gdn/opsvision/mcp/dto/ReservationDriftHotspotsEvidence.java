@@ -60,6 +60,8 @@ public record ReservationDriftHotspotsEvidence(
             String skuCode,
             String stockIndicator,
             String physicalWarehouseCode,
+            Long supplierId,
+            String supplierCode,
             int aggregateOriginalQty,
             int binSumOriginalQty,
             int originalDivergence,

@@ -33,6 +33,8 @@ public record StockDiscrepancyOriginEvidence(
             long wimId,
             String stockIndicator,
             String physicalWarehouseCode,
+            Long supplierId,
+            String supplierCode,
             AggregateVsBinsCheck aggregateVsBins,
             int divergentTraceCount,
             boolean divergentTracesTruncated,

@@ -390,15 +390,26 @@ public class StockHistoryRepository {
      */
     public List<DriftHotspotRow> findReservationDriftHotspotsAtSite(
             String siteCode, LocalDateTime since, int minDrift, int limit) {
+        return findReservationDriftHotspotsAtSite(siteCode, since, minDrift, limit, null);
+    }
+
+    /** Variant with optional {@code supplierCode} filter (matched against supplier.code). */
+    public List<DriftHotspotRow> findReservationDriftHotspotsAtSite(
+            String siteCode, LocalDateTime since, int minDrift, int limit, String supplierCode) {
+        String supplier = (supplierCode == null || supplierCode.isBlank()) ? null : supplierCode;
         return inventory.sql("""
                         WITH site_wims AS (
                           SELECT wim.id              AS wim_id,
                                  wim.stock_indicator AS stock_indicator,
-                                 i.code              AS sku_code
+                                 i.code              AS sku_code,
+                                 wim.supplier        AS supplier_id,
+                                 s.code              AS supplier_code
                             FROM warehouse_item_master wim
                             JOIN warehouse w ON w.id = wim.warehouse
                             JOIN item      i ON i.id = wim.item
+                            LEFT JOIN supplier s ON s.id = wim.supplier
                            WHERE w.code = :site
+                             AND (CAST(:supplier AS varchar) IS NULL OR s.code = :supplier)
                         ),
                         bin_sums AS (
                           SELECT wibm.warehouse_item_master                AS wim_id,
@@ -422,6 +433,8 @@ public class StockHistoryRepository {
                         SELECT sw.wim_id,
                                sw.sku_code,
                                sw.stock_indicator,
+                               sw.supplier_id,
+                               sw.supplier_code,
                                COALESCE(pos.quantity, 0)::int                              AS aggregate_original_qty,
                                COALESCE(bs.bin_sum_original_qty, 0)::int                   AS bin_sum_original_qty,
                                (COALESCE(pos.quantity, 0)
@@ -450,6 +463,7 @@ public class StockHistoryRepository {
                          LIMIT :lim
                         """)
                 .param("site", siteCode)
+                .param("supplier", supplier)
                 .param("since", since)
                 .param("minDrift", minDrift)
                 .param("lim", limit)
@@ -464,12 +478,21 @@ public class StockHistoryRepository {
      */
     public DriftSummaryRow findReservationDriftSummaryAtSite(
             String siteCode, LocalDateTime since, int minDrift) {
+        return findReservationDriftSummaryAtSite(siteCode, since, minDrift, null);
+    }
+
+    /** Variant with optional {@code supplierCode} filter — see {@link #findReservationDriftHotspotsAtSite}. */
+    public DriftSummaryRow findReservationDriftSummaryAtSite(
+            String siteCode, LocalDateTime since, int minDrift, String supplierCode) {
+        String supplier = (supplierCode == null || supplierCode.isBlank()) ? null : supplierCode;
         return inventory.sql("""
                         WITH site_wims AS (
                           SELECT wim.id AS wim_id
                             FROM warehouse_item_master wim
                             JOIN warehouse w ON w.id = wim.warehouse
+                            LEFT JOIN supplier s ON s.id = wim.supplier
                            WHERE w.code = :site
+                             AND (CAST(:supplier AS varchar) IS NULL OR s.code = :supplier)
                         ),
                         bin_sums AS (
                           SELECT wibm.warehouse_item_master AS wim_id,
@@ -515,6 +538,7 @@ public class StockHistoryRepository {
                           FROM rows
                         """)
                 .param("site", siteCode)
+                .param("supplier", supplier)
                 .param("since", since)
                 .param("minDrift", minDrift)
                 .query(RecordRowMapper.of(DriftSummaryRow.class))
@@ -525,6 +549,8 @@ public class StockHistoryRepository {
             long wimId,
             String skuCode,
             String stockIndicator,
+            Long supplierId,
+            String supplierCode,
             int aggregateOriginalQty,
             int binSumOriginalQty,
             int originalDivergence,

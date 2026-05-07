@@ -20,6 +20,8 @@ public record InventoryReservationReconciliation(
 
     public record ItemReconciliation(
             String skuCode,
+            Long supplierId,
+            String supplierCode,
             StockholmDemand stockholm,
             List<InventoryForItemEvidence.WarehouseItemMaster> inventory,
             Divergences divergences) {

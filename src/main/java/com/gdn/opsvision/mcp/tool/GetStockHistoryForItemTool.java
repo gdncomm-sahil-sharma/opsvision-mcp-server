@@ -80,7 +80,8 @@ public class GetStockHistoryForItemTool {
             @ToolParam(description = "Site / warehouse code (warehouse.code, e.g. 'MAR-0000000001')") String siteCode,
             @ToolParam(description = "Lower bound: ISO date 'YYYY-MM-DD' (inclusive day) or datetime 'YYYY-MM-DDTHH:MM:SS' (inclusive moment). Required.") String since,
             @ToolParam(description = "Upper bound: ISO date 'YYYY-MM-DD' (inclusive day) or datetime (exclusive moment). Required.") String until,
-            @ToolParam(description = "Per-WIM cap on recentDecrements rows (default 5, max 50)", required = false) Integer decrementLimit) {
+            @ToolParam(description = "Per-WIM cap on recentDecrements rows (default 5, max 50)", required = false) Integer decrementLimit,
+            @ToolParam(description = "Optional supplier.code to narrow CONSIGNMENT_TRADING SKUs to a single supplier's WIM. No-op for TRADING.", required = false) String supplierCode) {
 
         LocalDateTime windowStart = IsoBound.parseSince(since);
         LocalDateTime windowEnd = IsoBound.parseUntil(until);
@@ -91,7 +92,7 @@ public class GetStockHistoryForItemTool {
 
         int effectiveLimit = clampLimit(decrementLimit);
 
-        List<WimRef> wims = inventoryRepo.findWimsBySkuAndSite(skuCode, siteCode);
+        List<WimRef> wims = inventoryRepo.findWimsBySkuAndSite(skuCode, siteCode, supplierCode);
         List<WimEvidence> out = new ArrayList<>(wims.size());
         for (WimRef w : wims) {
             List<ActionGroupRow> rawGroups = stockHistoryRepo.findGroupedByActionForWim(
@@ -135,6 +136,8 @@ public class GetStockHistoryForItemTool {
             out.add(new WimEvidence(
                     w.wimId(),
                     w.stockIndicator(),
+                    w.supplierId(),
+                    w.supplierCode(),
                     totalEvents,
                     truncated,
                     grouped,

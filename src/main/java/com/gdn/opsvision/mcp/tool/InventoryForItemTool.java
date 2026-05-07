@@ -41,16 +41,25 @@ public class InventoryForItemTool {
             stockholm warehouse where the stock sits — equal to siteCode for UNRESTRICTED, equal \
             to the defect sibling for RESTRICTED. Picking always filters UNRESTRICTED only \
             (PickingBinSelectionHelper.java:136), so RESTRICTED rows never participate in \
-            pick-list allocation. If the SKU isn't onboarded at the site, returns an evidence \
-            pack with an empty warehouseItemMasters list.
+            pick-list allocation.
+
+            Each row also carries supplierId / supplierCode. For TRADING stock_type the supplier \
+            dimension is irrelevant (one WIM per (site, SKU, stock_indicator)); for \
+            CONSIGNMENT_TRADING the same (site, SKU) maps to multiple WIMs distinguished by \
+            supplier (~7-8% of rows at MAR). Pass the optional supplierCode parameter to narrow \
+            to a single supplier — useful for consignment SKUs.
+
+            If the SKU isn't onboarded at the site, returns an evidence pack with an empty \
+            warehouseItemMasters list.
             """)
     public InventoryForItemEvidence getInventoryForItem(
             @ToolParam(description = "SKU code (item.code in the inventory DB)") String skuCode,
-            @ToolParam(description = "Site / warehouse code (warehouse.code, e.g. 'MAR-0000000001')") String siteCode) {
+            @ToolParam(description = "Site / warehouse code (warehouse.code, e.g. 'MAR-0000000001')") String siteCode,
+            @ToolParam(description = "Optional supplier code (supplier.code) to narrow CONSIGNMENT_TRADING SKUs to a single supplier's WIM. No-op for TRADING. Omit to return all suppliers' rows.", required = false) String supplierCode) {
         String restrictedSibling = defectMapRepo.defectCodeFor(siteCode).orElse(null);
         return new InventoryForItemEvidence(
                 skuCode,
                 siteCode,
-                repo.findStockForItem(skuCode, siteCode, restrictedSibling));
+                repo.findStockForItem(skuCode, siteCode, restrictedSibling, supplierCode));
     }
 }

@@ -43,6 +43,13 @@ public class ReconciliationTool {
             via SKU code (item.code), not by id (item.id values differ between stockholm and \
             warehouse-inventory). siteCode is resolved from the PP's sales_order.warehouse.
 
+            Demand rows are grouped by (skuCode, supplierCode), not by skuCode alone. For \
+            CONSIGNMENT_TRADING SKUs the same (site, SKU) maps to multiple supplier-distinct \
+            WIMs and stockholm.warehouse_item.supplier identifies which supplier the \
+            picking_item is reserving from — lumping by SKU alone would mismatch demand against \
+            inventory. TRADING demand rows have no supplier on the stockholm side and reconcile \
+            against all WIMs for the SKU (no supplier filter applied).
+
             Each StockholmDemand also carries `stockTraceIds` — the picking_item.stock_trace_id \
             UUIDs for that SKU. Pass these to getStockTrace to walk the warehouse-inventory audit \
             chain (PP creation reservation → bin reservation → PLD pick decrement → GIN). That's \
