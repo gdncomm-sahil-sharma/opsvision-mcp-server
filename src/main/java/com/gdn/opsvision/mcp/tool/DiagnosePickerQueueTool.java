@@ -31,6 +31,7 @@ import com.gdn.opsvision.mcp.repository.PickerAccessRepository.PickerStateRow;
 import com.gdn.opsvision.mcp.repository.PickerAccessRepository.ZoneActivityRow;
 import com.gdn.opsvision.mcp.repository.PickerAccessRepository.ZoneGroupRow;
 import com.gdn.opsvision.mcp.repository.PickerAccessRepository.ZoneRow;
+import com.gdn.opsvision.mcp.tool.util.PickerStatusSummaries;
 
 /**
  * Picker-rooted twin of {@code diagnosePickPackage}. Answers "why is THIS picker's queue
@@ -273,24 +274,7 @@ public class DiagnosePickerQueueTool {
             return new SiblingPickerSummary(0, new PickerStatusBreakdown(0, 0, 0, 0, 0, 0, 0));
         }
         List<PickerRow> sibs = pickerAccessRepo.findSiblingPickers(zoneGroupIds, pickerId);
-        return new SiblingPickerSummary(sibs.size(), breakdown(sibs));
-    }
-
-    private static PickerStatusBreakdown breakdown(List<PickerRow> pickers) {
-        int avail = 0, busy = 0, off = 0, brkInit = 0, brkRej = 0, occ = 0, other = 0;
-        for (PickerRow p : pickers) {
-            String s = p.status() == null ? "" : p.status();
-            switch (s) {
-                case "AVAILABLE" -> avail++;
-                case "BUSY" -> busy++;
-                case "OFFLINE" -> off++;
-                case "BREAK_INITIATED" -> brkInit++;
-                case "BREAK_REJECT_PICKLIST" -> brkRej++;
-                case "OCCUPIED" -> occ++;
-                default -> other++;
-            }
-        }
-        return new PickerStatusBreakdown(avail, busy, off, brkInit, brkRej, occ, other);
+        return new SiblingPickerSummary(sibs.size(), PickerStatusSummaries.breakdown(sibs));
     }
 
     /**

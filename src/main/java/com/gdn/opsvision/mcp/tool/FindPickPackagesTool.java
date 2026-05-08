@@ -1,6 +1,5 @@
 package com.gdn.opsvision.mcp.tool;
 
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -17,12 +16,10 @@ import com.gdn.opsvision.mcp.repository.PickPackageSearchRepository.PpSearchRow;
 import com.gdn.opsvision.mcp.repository.PickPackageSearchRepository.SearchFilters;
 import com.gdn.opsvision.mcp.repository.PickPackageSearchRepository.SortBy;
 import com.gdn.opsvision.mcp.tool.util.IsoBound;
+import com.gdn.opsvision.mcp.tool.util.Pagination;
 
 @Service
 public class FindPickPackagesTool {
-
-    private static final int DEFAULT_LIMIT = 50;
-    private static final int MAX_LIMIT = 200;
 
     /**
      * {@code PickPackageStatus} enum names indexed by ordinal — matches the persistence
@@ -110,7 +107,7 @@ public class FindPickPackagesTool {
             @ToolParam(description = "Sort: CREATED_ASC (default) / CREATED_DESC / UPDATED_DESC", required = false) String sortBy,
             @ToolParam(description = "Max rows (default 50, capped at 200)", required = false) Integer limit) {
 
-        int effective = clampLimit(limit);
+        int effective = Pagination.clampLimit(limit);
         SortBy sort = parseSort(sortBy);
         // Unresolvable ppStatus (provided but not a known enum name) must return 0 matches —
         // not silently become "no filter". Short-circuit before hitting the DB.
@@ -128,8 +125,8 @@ public class FindPickPackagesTool {
                 resolveAssignedPicker(assignedPicker),
                 blankToNull(batchId),
                 blankToNull(waveNumber),
-                parseSince(sinceDate),
-                parseUntil(untilDate),
+                IsoBound.parseSince(sinceDate),
+                IsoBound.parseUntil(untilDate),
                 hasOpenPickList,
                 blankToNull(openZoneCode),
                 blankToNull(sourceArea));
@@ -195,22 +192,7 @@ public class FindPickPackagesTool {
         }
     }
 
-    private static int clampLimit(Integer limit) {
-        if (limit == null || limit <= 0) {
-            return DEFAULT_LIMIT;
-        }
-        return Math.min(limit, MAX_LIMIT);
-    }
-
     private static String blankToNull(String s) {
         return (s == null || s.isBlank()) ? null : s;
-    }
-
-    private static LocalDateTime parseSince(String iso) {
-        return IsoBound.parseSince(iso);
-    }
-
-    private static LocalDateTime parseUntil(String iso) {
-        return IsoBound.parseUntil(iso);
     }
 }

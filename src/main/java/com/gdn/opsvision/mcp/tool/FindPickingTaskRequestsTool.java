@@ -1,7 +1,5 @@
 package com.gdn.opsvision.mcp.tool;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -18,12 +16,11 @@ import com.gdn.opsvision.mcp.dto.PickingTaskRequestSearchEvidence.RequestMatch;
 import com.gdn.opsvision.mcp.repository.MovementSearchRepository;
 import com.gdn.opsvision.mcp.repository.MovementSearchRepository.RequestRow;
 import com.gdn.opsvision.mcp.repository.PickPackageRepository;
+import com.gdn.opsvision.mcp.tool.util.IsoBound;
+import com.gdn.opsvision.mcp.tool.util.Pagination;
 
 @Service
 public class FindPickingTaskRequestsTool {
-
-    private static final int DEFAULT_LIMIT = 50;
-    private static final int MAX_LIMIT = 200;
 
     private final MovementSearchRepository movementSearch;
     private final PickPackageRepository pickPackageRepo;
@@ -78,12 +75,12 @@ public class FindPickingTaskRequestsTool {
             @ToolParam(description = "true = only requests with multi_sku_batch_failed_reason populated; false = only those without", required = false) Boolean hasMultiSkuBatchFailedReason,
             @ToolParam(description = "Max rows (default 50, capped at 200)", required = false) Integer limit) {
 
-        int effectiveLimit = clampLimit(limit);
+        int effectiveLimit = Pagination.clampLimit(limit);
 
         List<RequestRow> rows = movementSearch.searchRequests(
                 siteCode,
-                parseSinceBound(sinceDate),
-                parseUntilBound(untilDate),
+                IsoBound.parseSince(sinceDate),
+                IsoBound.parseUntil(untilDate),
                 status,
                 previousStatus,
                 referenceType,
@@ -126,35 +123,5 @@ public class FindPickingTaskRequestsTool {
         }
 
         return new PickingTaskRequestSearchEvidence(matches.size(), truncated, matches);
-    }
-
-    private static int clampLimit(Integer limit) {
-        if (limit == null || limit <= 0) {
-            return DEFAULT_LIMIT;
-        }
-        return Math.min(limit, MAX_LIMIT);
-    }
-
-    private static LocalDateTime parseSinceBound(String iso) {
-        return parseBound(iso, /*untilSemantics=*/false);
-    }
-
-    private static LocalDateTime parseUntilBound(String iso) {
-        return parseBound(iso, /*untilSemantics=*/true);
-    }
-
-    private static LocalDateTime parseBound(String iso, boolean untilSemantics) {
-        if (iso == null || iso.isBlank()) {
-            return null;
-        }
-        String s = iso.trim();
-        if (s.endsWith("Z")) {
-            s = s.substring(0, s.length() - 1);
-        }
-        if (s.contains("T")) {
-            return LocalDateTime.parse(s);
-        }
-        LocalDate d = LocalDate.parse(s);
-        return untilSemantics ? d.plusDays(1).atStartOfDay() : d.atStartOfDay();
     }
 }

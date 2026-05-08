@@ -1,7 +1,5 @@
 package com.gdn.opsvision.mcp.tool;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -19,12 +17,11 @@ import com.gdn.opsvision.mcp.repository.MovementSearchRepository;
 import com.gdn.opsvision.mcp.repository.MovementSearchRepository.TaskRow;
 import com.gdn.opsvision.mcp.repository.PickPackageRepository;
 import com.gdn.opsvision.mcp.repository.StockHistoryRepository;
+import com.gdn.opsvision.mcp.tool.util.IsoBound;
+import com.gdn.opsvision.mcp.tool.util.Pagination;
 
 @Service
 public class FindPickingTasksTool {
-
-    private static final int DEFAULT_LIMIT = 50;
-    private static final int MAX_LIMIT = 200;
 
     private final MovementSearchRepository movementSearch;
     private final PickPackageRepository pickPackageRepo;
@@ -88,13 +85,13 @@ public class FindPickingTasksTool {
             @ToolParam(description = "Max rows (default 50, capped at 200)", required = false) Integer limit,
             @ToolParam(description = "Cross-DB filter: only keep tasks whose stock_trace_id has zero DECREASE_* events in stock_history", required = false) Boolean phantomClose) {
 
-        int effectiveLimit = clampLimit(limit);
+        int effectiveLimit = Pagination.clampLimit(limit);
         boolean phantom = Boolean.TRUE.equals(phantomClose);
 
         List<TaskRow> rows = movementSearch.searchTasks(
                 siteCode,
-                parseSinceBound(sinceDate),
-                parseUntilBound(untilDate),
+                IsoBound.parseSince(sinceDate),
+                IsoBound.parseUntil(untilDate),
                 status,
                 previousStatus,
                 automation,
@@ -166,43 +163,5 @@ public class FindPickingTasksTool {
         }
 
         return new PickingTaskSearchEvidence(matches.size(), truncated, phantom, matches);
-    }
-
-    private static int clampLimit(Integer limit) {
-        if (limit == null || limit <= 0) {
-            return DEFAULT_LIMIT;
-        }
-        return Math.min(limit, MAX_LIMIT);
-    }
-
-    /**
-     * Parse the lower bound. Date-only ('2026-05-04') becomes 00:00 of that day.
-     * A full datetime ('2026-05-04T03:15:00') is used as-is. Trailing 'Z' is tolerated.
-     */
-    private static LocalDateTime parseSinceBound(String iso) {
-        return parseBound(iso, /*untilSemantics=*/false);
-    }
-
-    /**
-     * Parse the upper bound. Date-only becomes start of next day (inclusive day semantics).
-     * A full datetime is used as-is (exclusive moment).
-     */
-    private static LocalDateTime parseUntilBound(String iso) {
-        return parseBound(iso, /*untilSemantics=*/true);
-    }
-
-    private static LocalDateTime parseBound(String iso, boolean untilSemantics) {
-        if (iso == null || iso.isBlank()) {
-            return null;
-        }
-        String s = iso.trim();
-        if (s.endsWith("Z")) {
-            s = s.substring(0, s.length() - 1);
-        }
-        if (s.contains("T")) {
-            return LocalDateTime.parse(s);
-        }
-        LocalDate d = LocalDate.parse(s);
-        return untilSemantics ? d.plusDays(1).atStartOfDay() : d.atStartOfDay();
     }
 }

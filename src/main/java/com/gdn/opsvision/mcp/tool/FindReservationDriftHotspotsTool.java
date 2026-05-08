@@ -19,6 +19,7 @@ import com.gdn.opsvision.mcp.repository.StockHistoryRepository.DriftHotspotRow;
 import com.gdn.opsvision.mcp.repository.StockHistoryRepository.DriftSummaryRow;
 import com.gdn.opsvision.mcp.repository.WarehouseDefectMapRepository;
 import com.gdn.opsvision.mcp.tool.util.IsoBound;
+import com.gdn.opsvision.mcp.tool.util.Pagination;
 
 /**
  * Site-wide scanner for {@code warehouse_item_master} rows whose aggregate-vs-bins
@@ -35,8 +36,6 @@ import com.gdn.opsvision.mcp.tool.util.IsoBound;
 @Service
 public class FindReservationDriftHotspotsTool {
 
-    private static final int DEFAULT_LIMIT = 50;
-    private static final int MAX_LIMIT = 200;
     private static final int DEFAULT_MIN_DRIFT = 1;
 
     private final StockHistoryRepository stockHistoryRepo;
@@ -109,7 +108,7 @@ public class FindReservationDriftHotspotsTool {
             @ToolParam(description = "Max hotspots to return (default 50, capped at 200)", required = false) Integer limit,
             @ToolParam(description = "Optional supplier.code to narrow the scan to a single supplier's WIMs. Useful for CONSIGNMENT_TRADING-heavy investigations.", required = false) String supplierCode) {
 
-        int effectiveLimit = clampLimit(limit);
+        int effectiveLimit = Pagination.clampLimit(limit);
         int effectiveMinDrift = clampMinDrift(minAbsoluteDrift);
         LocalDateTime since = IsoBound.parseSince(sinceDate);
         String defectCode = defectMapRepo.defectCodeFor(siteCode).orElse(null);
@@ -175,13 +174,6 @@ public class FindReservationDriftHotspotsTool {
                 sinceDate,
                 summary,
                 hotspots);
-    }
-
-    private static int clampLimit(Integer limit) {
-        if (limit == null || limit <= 0) {
-            return DEFAULT_LIMIT;
-        }
-        return Math.min(limit, MAX_LIMIT);
     }
 
     private static int clampMinDrift(Integer minDrift) {

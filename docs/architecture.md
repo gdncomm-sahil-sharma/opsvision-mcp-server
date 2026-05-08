@@ -16,7 +16,7 @@ into the SCPS investigation tooling. Suitable for slide adaptation.
 |---|---|
 | **Purpose** | Surface SCPS warehouse picking-flow facts to AI agents over MCP |
 | **Tech stack** | Java 21 · Spring Boot 4.0.6 · Spring AI 2.0.0-M5 · MCP over Streamable HTTP (negotiates 2025-03-26 or 2025-11-25) · JdbcClient · HikariCP 7 · PostgreSQL 13 |
-| **Scope** | 13 read-only tools, 3 PostgreSQL datasources, 12 repositories, 13 evidence DTO records + 9 lifecycle enums + `SignalKind` enum |
+| **Scope** | 19 read-only tools, 3 PostgreSQL datasources, 14 repositories, 18 evidence DTO records + 9 lifecycle enums + `SignalKind` enum |
 | **Site** | Marunda (`MAR-0000000001` distribution + `MAN-0000000002` non-distribution) |
 | **Read-only** | Triple-enforced (Hikari · session SQL · `@Transactional(readOnly=true)`) + integration test |
 | **Philosophy** | **Evidence, not verdicts** — tools return structured facts; the agent draws conclusions |
@@ -42,7 +42,7 @@ operator opinions to the agent.
    │                                                               │
    │   ┌─────────────┐   ┌─────────────┐   ┌──────────────────┐    │
    │   │ Tool layer  │ → │ Repo layer  │ → │ JdbcClient × 3   │    │
-   │   │ (13 @Tool)  │   │ (12 repos)  │   │ (Hikari pools)   │    │
+   │   │ (19 @Tool)  │   │ (14 repos)  │   │ (Hikari pools)   │    │
    │   └─────────────┘   └─────────────┘   └────────┬─────────┘    │
    └─────────────────────────────────────────────────┼─────────────┘
                                      ┌───────────────┼───────────────┐
@@ -79,7 +79,7 @@ The server is a four-layer Spring Boot application:
    └─────────────────────────────────────────────────────────────────┘
                                   ▼
    ┌─────────────────────────────────────────────────────────────────┐
-   │  Tool layer  (13 @Tool methods registered in McpToolsConfig)    │
+   │  Tool layer  (19 @Tool methods registered in McpToolsConfig)    │
    │                                                                 │
    │   Composes evidence packs from one or more repositories, runs   │
    │   pure-Java derivations (lifecycle stages, boolean signals,     │
@@ -87,7 +87,7 @@ The server is a four-layer Spring Boot application:
    └─────────────────────────────────────────────────────────────────┘
                                   ▼
    ┌─────────────────────────────────────────────────────────────────┐
-   │  Repository layer  (12 @Repository classes)                     │
+   │  Repository layer  (14 @Repository classes)                     │
    │                                                                 │
    │   One repo per logical concern (PickPackage, Picker, Movement,  │
    │   Inventory, …). Uses Spring's JdbcClient with named-parameter  │
@@ -116,8 +116,8 @@ src/main/java/com/gdn/opsvision/mcp/
 ├── OpsvisionMcpApplication.java     (@SpringBootApplication entry)
 ├── config/
 │   ├── DataSourcesConfig.java       (3 Hikari + 3 JdbcClient beans)
-│   └── McpToolsConfig.java          (registers 13 @Tool methods)
-├── tool/                            (13 service classes, @Service @Tool methods)
+│   └── McpToolsConfig.java          (registers 19 @Tool methods)
+├── tool/                            (19 service classes, @Service @Tool methods)
 │   ├── DiagnosePickPackageTool.java
 │   ├── DiagnosePickerQueueTool.java
 │   ├── FindPickingTaskRequestsTool.java
@@ -133,7 +133,7 @@ src/main/java/com/gdn/opsvision/mcp/
 │   ├── StockTraceTool.java
 │   └── util/
 │       └── IsoBound.java            (ISO date / datetime parser for tz-less timestamp params)
-├── repository/                      (12 @Repository classes)
+├── repository/                      (14 @Repository classes)
 │   ├── InventoryRepository.java
 │   ├── MovementRepository.java
 │   ├── MovementSearchRepository.java
@@ -197,7 +197,7 @@ table …" is the equivalent rejection. The integration test asserts both.
 
 ---
 
-## 5. The 13 tools
+## 5. The 19 tools
 
 Tools are grouped by purpose. Each is a `@Tool`-annotated method on a
 `@Service` class, registered via `McpToolsConfig.opsvisionTools(...)`.
@@ -234,6 +234,17 @@ Tools are grouped by purpose. Each is a `@Tool`-annotated method on a
 |---|---|---|
 | `findPickingTasks` | `PickingTaskSearchEvidence` (filtered list of `picking_task` rows) | Find tasks matching status / time / picker / SKU |
 | `findPickingTaskRequests` | `PickingTaskRequestSearchEvidence` (filtered task-request rows) | Find requests stuck in HOLD, etc. |
+| `findPickPackages` | `PickPackageSearchEvidence` (filtered `pick_package` rows) | Generic micro-API search across PPs by status, picker, batch, zone, time |
+| `findOrdersByLastProcessDate` | `OrdersByLastProcessDateEvidence` (active snapshot + terminal-in-window) | Operational dashboard view of sales-order state at a site |
+
+### E) Site-wide scanners and aggregations
+
+| Tool | Returns | Primary use |
+|---|---|---|
+| `findReservationDriftHotspots` | `ReservationDriftHotspotsEvidence` (WIM rows ranked by aggregate-vs-bins drift) | "Which SKUs at this site have phantom-reservation leaks?" |
+| `findStockDiscrepancyOrigin` | `StockDiscrepancyOriginEvidence` (stock_traces where bin-net ≠ WIM-net for a SKU) | Forensic per-SKU origin of stock discrepancies |
+| `findPpsBlockedByPickerAvailability` | `PpsBlockedByPickerAvailabilityEvidence` (per-zone groups of stuck PPs + picker pool) | "Which PPs are waiting for a free picker, grouped by zone?" |
+| `aggregateSalesOrdersByStatus` | `SalesOrderStatusAggregateEvidence` (histogram of `last_status`) | "What's the breakdown of orders by status at this site right now?" |
 
 ### Cap-and-truncate everywhere
 
@@ -511,7 +522,7 @@ manual via `curl` against the running server.
                                 ▼
                           McpToolsConfig ──────────────────────┐
                                 │                              │
-                                ▼ (registers 13 @Tool methods) │
+                                ▼ (registers 19 @Tool methods) │
                   ┌─────────────────────────────────────┐      │
                   │              tool/                  │      │
                   └──────────────────┬──────────────────┘      │

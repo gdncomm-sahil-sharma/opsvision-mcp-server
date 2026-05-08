@@ -19,6 +19,8 @@ import com.gdn.opsvision.mcp.dto.PpsBlockedByPickerAvailabilityEvidence.ZoneGrou
 import com.gdn.opsvision.mcp.repository.PickerAccessRepository;
 import com.gdn.opsvision.mcp.repository.PickerAccessRepository.BlockedPpRow;
 import com.gdn.opsvision.mcp.repository.PickerAccessRepository.PickerRow;
+import com.gdn.opsvision.mcp.tool.util.Pagination;
+import com.gdn.opsvision.mcp.tool.util.PickerStatusSummaries;
 
 /**
  * Bulk view of the {@code hasEligiblePickersButNoneAvailable} signal — finds every PP
@@ -33,9 +35,6 @@ import com.gdn.opsvision.mcp.repository.PickerAccessRepository.PickerRow;
  */
 @Service
 public class FindPpsBlockedByPickerAvailabilityTool {
-
-    private static final int DEFAULT_LIMIT = 50;
-    private static final int MAX_LIMIT = 200;
 
     private final PickerAccessRepository pickerAccessRepo;
 
@@ -72,7 +71,7 @@ public class FindPpsBlockedByPickerAvailabilityTool {
             @ToolParam(description = "Site / warehouse code (e.g. 'MAR-0000000001')") String siteCode,
             @ToolParam(description = "Max blocked PPs to return (default 50, capped at 200)", required = false) Integer limit) {
 
-        int effective = clampLimit(limit);
+        int effective = Pagination.clampLimit(limit);
 
         // limit + 1 sentinel for truncation detection.
         List<BlockedPpRow> rows = pickerAccessRepo.findPpsBlockedByPickerAvailability(
@@ -103,9 +102,9 @@ public class FindPpsBlockedByPickerAvailabilityTool {
 
             List<PickerRow> pool = pickerAccessRepo.findEligiblePickersForZones(
                     List.of(zoneId), siteCode);
-            PickerStatusBreakdown breakdown = DiagnosePickPackageTool.breakdown(pool);
-            PickerStatusFreshness freshness = DiagnosePickPackageTool.freshness(pool, now);
-            List<PickerSnapshot> sample = DiagnosePickPackageTool.recentlyOnlineSample(pool, now);
+            PickerStatusBreakdown breakdown = PickerStatusSummaries.breakdown(pool);
+            PickerStatusFreshness freshness = PickerStatusSummaries.freshness(pool, now);
+            List<PickerSnapshot> sample = PickerStatusSummaries.recentlyOnlineSample(pool, now);
 
             List<BlockedPp> blockedPackages = new ArrayList<>(zoneRows.size());
             for (BlockedPpRow r : zoneRows) {
@@ -126,12 +125,5 @@ public class FindPpsBlockedByPickerAvailabilityTool {
 
         return new PpsBlockedByPickerAvailabilityEvidence(
                 siteCode, rows.size(), groups.size(), truncated, effective, groups);
-    }
-
-    private static int clampLimit(Integer limit) {
-        if (limit == null || limit <= 0) {
-            return DEFAULT_LIMIT;
-        }
-        return Math.min(limit, MAX_LIMIT);
     }
 }
